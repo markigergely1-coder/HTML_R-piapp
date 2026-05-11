@@ -69,7 +69,7 @@ function renderShell(state: OverviewState): string {
   return `
     <div class="device">
       ${renderHeader('overview')}
-      ${renderHero(state)}
+      <div id="hero-wrapper">${renderHero(state)}</div>
       ${renderDateScroller(state)}
       <div id="result-main" class="px-5 pt-3">
         ${renderResult(state)}
@@ -332,11 +332,15 @@ function renderVolleyballArt(): string {
 function attachHandlers(container: HTMLElement, state: OverviewState) {
   const scroller = container.querySelector<HTMLDivElement>('#date-scroller')!;
 
-  // Scroll a kiválasztott chiphez
-  requestAnimationFrame(() => {
-    scroller.querySelector<HTMLButtonElement>(`[data-date="${state.selected}"]`)
-      ?.scrollIntoView({ behavior: 'instant', block: 'nearest', inline: 'center' });
-  });
+  // Scroller horizontális scroll — csak a scroller-t scrollozzuk, nem az oldalt
+  const scrollToSelected = (smooth = false) => {
+    const chip = scroller.querySelector<HTMLButtonElement>(`[data-date="${state.selected}"]`);
+    if (!chip) return;
+    const targetLeft = chip.offsetLeft - (scroller.offsetWidth - chip.offsetWidth) / 2;
+    scroller.scrollTo({ left: Math.max(0, targetLeft), behavior: smooth ? 'smooth' : 'instant' });
+  };
+
+  requestAnimationFrame(() => scrollToSelected(false));
 
   // Dátum chip kattintás
   scroller.addEventListener('click', (e) => {
@@ -346,9 +350,9 @@ function attachHandlers(container: HTMLElement, state: OverviewState) {
     if (!date || date === state.selected) return;
     state.selected = date;
 
-    // Hero frissítés
-    const heroSection = container.querySelector<HTMLElement>('section.fade-up');
-    if (heroSection) heroSection.outerHTML = renderHero(state);
+    // Hero frissítés (innerHTML a stabil wrapper-en — outerHTML helyett)
+    const heroWrapper = container.querySelector<HTMLElement>('#hero-wrapper')!;
+    heroWrapper.innerHTML = renderHero(state);
 
     // Chip-ek frissítés
     scroller.innerHTML = state.dates.map((d) => renderDateChip(d, state)).join('');
@@ -357,11 +361,8 @@ function attachHandlers(container: HTMLElement, state: OverviewState) {
     const resultEl = container.querySelector<HTMLElement>('#result-main')!;
     resultEl.innerHTML = renderResult(state);
 
-    // Re-scroll
-    requestAnimationFrame(() => {
-      scroller.querySelector<HTMLButtonElement>(`[data-date="${state.selected}"]`)
-        ?.scrollIntoView({ behavior: 'smooth', block: 'nearest', inline: 'center' });
-    });
+    // Scroll csak a scroller-en belül
+    requestAnimationFrame(() => scrollToSelected(true));
   });
 }
 
