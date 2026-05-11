@@ -4,7 +4,7 @@
  */
 
 import { getAuthState, signIn, signOut } from '../lib/auth';
-import { getInitials, getAvatarColor } from '../lib/avatar';
+import { getInitials } from '../lib/avatar';
 
 export type PageKey = 'overview' | 'profile' | 'qr' | 'members';
 

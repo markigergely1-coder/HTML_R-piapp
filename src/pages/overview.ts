@@ -65,16 +65,32 @@ function renderLoadingShell(): string {
 }
 
 // ─── Shell ───
+// Mobile (< lg): hero → scroller → résztvevők → teaser (stacked)
+// Desktop (lg+): 3-col grid — hero (sticky) | résztvevők | dátum-lista (sticky)
 function renderShell(state: OverviewState): string {
   return `
     <div class="device">
       ${renderHeader('overview')}
-      <div id="hero-wrapper">${renderHero(state)}</div>
-      ${renderDateScroller(state)}
-      <div id="result-main" class="px-5 pt-3">
-        ${renderResult(state)}
+      <div class="lg:grid lg:grid-cols-[300px_1fr_260px] lg:gap-6 lg:p-6 lg:pt-5 lg:items-start">
+        <!-- Bal oszlop: Hero (sticky desktop-on) -->
+        <div id="hero-wrapper" class="lg:sticky lg:top-[110px]">
+          ${renderHero(state)}
+        </div>
+        <!-- Középső oszlop: scroller (csak mobil) + Résztvevők + Teaser -->
+        <div class="lg:min-w-0">
+          <div class="lg:hidden">
+            ${renderDateScroller(state)}
+          </div>
+          <div id="result-main" class="px-5 pt-3 lg:px-0 lg:pt-0">
+            ${renderResult(state)}
+          </div>
+          ${renderUpcomingTeaser()}
+        </div>
+        <!-- Jobb oszlop: Dátum-lista (csak desktop, sticky) -->
+        <div class="hidden lg:block lg:sticky lg:top-[110px]">
+          ${renderDateRail(state)}
+        </div>
       </div>
-      ${renderUpcomingTeaser()}
     </div>`;
 }
 
@@ -156,12 +172,12 @@ function renderHero(state: OverviewState): string {
 function renderDateScroller(state: OverviewState): string {
   const chips = state.dates.map((date) => renderDateChip(date, state)).join('');
   return `
-    <section class="px-5 pt-4 pb-1">
+    <section class="px-5 pt-4 pb-1 lg:px-0 lg:pt-0">
       <div class="flex items-end justify-between mb-2">
         <span class="eyebrow">Válassz alkalmat</span>
         <span class="eyebrow text-[10px]">${state.dates.length} alkalom</span>
       </div>
-      <div id="date-scroller" class="flex gap-2 overflow-x-auto no-scrollbar -mx-5 px-5 pb-2">
+      <div id="date-scroller" class="flex gap-2 overflow-x-auto no-scrollbar -mx-5 px-5 pb-2 lg:mx-0 lg:px-0">
         ${chips}
       </div>
     </section>`;
@@ -207,6 +223,83 @@ function renderDateChip(date: string, state: OverviewState): string {
     </button>`;
 }
 
+// ─── Date rail (desktop, függőleges lista) ───
+function renderDateRail(state: OverviewState): string {
+  return `
+    <section class="card overflow-hidden fade-up" style="border-radius:20px">
+      <div class="px-4 py-3 flex items-center justify-between" style="border-bottom:1px solid var(--line)">
+        <span class="eyebrow">Alkalmak</span>
+        <span class="eyebrow text-[10px]">${state.dates.length}</span>
+      </div>
+      <ul id="date-rail">
+        ${renderDateRailItems(state)}
+      </ul>
+    </section>`;
+}
+
+function renderDateRailItems(state: OverviewState): string {
+  return state.dates.map((d) => renderDateRailItem(d, state)).join('');
+}
+
+function renderDateRailItem(date: string, state: OverviewState): string {
+  const isCancelled = state.cancelled.has(date);
+  const isSelected = date === state.selected;
+  const isUpcoming = date === state.upcoming;
+  const count = state.attendeesByDate.get(date)?.length ?? 0;
+  const d = dayOf(date);
+  const monthShort = formatMonthShortHu(date);
+  const relLabel = getRelativeLabel(date);
+
+  const rowBg = isSelected
+    ? 'color-mix(in oklab,var(--accent) 14%,transparent)'
+    : 'transparent';
+  const numColor = isSelected ? 'var(--accent-ink)' : 'var(--fg-1)';
+  const monthColor = isSelected ? 'var(--accent-ink)' : 'var(--fg-3)';
+  const subColor = isSelected ? 'var(--accent-ink)' : 'var(--fg-2)';
+  const strike = isCancelled ? 'text-decoration:line-through' : '';
+
+  const upcomingDot = isUpcoming && !isCancelled
+    ? `<span class="w-1.5 h-1.5 rounded-full" style="background:#10b981;flex:none"></span>`
+    : '';
+
+  const sideAccent = isSelected
+    ? `<span style="position:absolute;left:0;top:8px;bottom:8px;width:3px;border-radius:0 3px 3px 0;background:var(--accent)"></span>`
+    : '';
+
+  const status = isCancelled
+    ? `<span class="text-[11px] font-medium" style="color:var(--fg-3);${strike}">Elmarad</span>`
+    : `<span class="text-[11px] font-mono-tnum font-medium" style="color:${subColor}">${count} fő</span>`;
+
+  const relSub = isCancelled
+    ? ''
+    : relLabel
+      ? `<span class="text-[10px] font-medium" style="color:${isSelected ? 'var(--accent-ink)' : 'var(--fg-3)'}">${relLabel}</span>`
+      : '';
+
+  return `
+    <li>
+      <button class="date-rail-btn relative w-full flex items-center gap-3 px-4 py-2.5 text-left transition-colors hover:bg-[color:var(--bg-elev)]"
+        data-date="${date}"
+        ${isCancelled ? 'aria-disabled="true"' : ''}
+        style="background:${rowBg};opacity:${isCancelled ? '0.55' : '1'};border-top:1px solid var(--line)">
+        ${sideAccent}
+        <div class="flex flex-col items-center" style="min-width:36px">
+          <span class="text-[9px] font-semibold uppercase tracking-widest"
+                style="color:${monthColor};${strike}">${monthShort}</span>
+          <span class="font-mono-tnum font-semibold text-[19px] leading-tight"
+                style="color:${numColor};${strike}">${d}</span>
+        </div>
+        <div class="flex-1 min-w-0 flex flex-col">
+          <div class="flex items-center gap-1.5">
+            ${upcomingDot}
+            ${relSub || `<span class="text-[10px]" style="color:${isSelected ? 'var(--accent-ink)' : 'var(--fg-3)'}">${eh(formatDateHuLong(date).split(',')[1]?.trim() ?? '')}</span>`}
+          </div>
+          ${status}
+        </div>
+      </button>
+    </li>`;
+}
+
 // ─── Result (state-függő) ───
 function renderResult(state: OverviewState): string {
   if (state.cancelled.has(state.selected)) {
@@ -224,10 +317,10 @@ function renderAttendeesSection(attendees: string[]): string {
     return `
       <div class="card flex items-center gap-2.5 px-3 py-2.5 lift" style="border-radius:16px">
         <div class="rounded-full flex items-center justify-center flex-shrink-0 font-semibold text-[10px]"
-             style="width:28px;height:28px;background:linear-gradient(135deg,hsl(${hue} 80% 88%) 0%,hsl(${(hue+30)%360} 75% 78%) 100%);color:hsl(${hue} 60% 30%)">
+             style="width:28px;height:28px;flex-shrink:0;background:linear-gradient(135deg,hsl(${hue} 80% 88%) 0%,hsl(${(hue+30)%360} 75% 78%) 100%);color:hsl(${hue} 60% 30%)">
           ${eh(initials)}
         </div>
-        <span class="text-[12.5px] font-medium text-fg-1 truncate">${eh(name)}</span>
+        <span class="text-[12.5px] font-medium text-fg-1">${eh(name)}</span>
       </div>`;
   }).join('');
 
@@ -237,7 +330,7 @@ function renderAttendeesSection(attendees: string[]): string {
         <h2 class="text-[20px] font-semibold tracking-tight text-fg-1">Résztvevők</h2>
         <span class="eyebrow">${attendees.length} fő</span>
       </div>
-      <div class="grid grid-cols-2 sm:grid-cols-3 gap-2">
+      <div class="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-2.5">
         ${cards}
       </div>
     </div>`;
@@ -292,7 +385,7 @@ function renderCancelledCard(date: string, info?: CancelledSession): string {
 // ─── Upcoming teaser strip ───
 function renderUpcomingTeaser(): string {
   return `
-    <section class="px-5 pt-5 pb-10">
+    <section class="px-5 pt-5 pb-10 lg:px-0 lg:pt-5 lg:pb-2">
       <div class="card-soft px-4 py-3 flex items-center gap-3" style="border-radius:18px">
         <div class="w-8 h-8 rounded-full flex items-center justify-center"
              style="background:color-mix(in oklab,var(--accent) 14%,transparent)">
@@ -331,6 +424,7 @@ function renderVolleyballArt(): string {
 // ─── Event handling ───
 function attachHandlers(container: HTMLElement, state: OverviewState) {
   const scroller = container.querySelector<HTMLDivElement>('#date-scroller')!;
+  const rail = container.querySelector<HTMLElement>('#date-rail'); // null desktop alatt is, mert hidden
 
   // Scroller horizontális scroll — csak a scroller-t scrollozzuk, nem az oldalt
   const scrollToSelected = (smooth = false) => {
@@ -342,27 +436,41 @@ function attachHandlers(container: HTMLElement, state: OverviewState) {
 
   requestAnimationFrame(() => scrollToSelected(false));
 
-  // Dátum chip kattintás
-  scroller.addEventListener('click', (e) => {
-    const target = (e.target as HTMLElement).closest<HTMLButtonElement>('.date-btn');
-    if (!target || target.getAttribute('aria-disabled') === 'true') return;
-    const date = target.dataset.date;
-    if (!date || date === state.selected) return;
+  // Központosított dátum-váltás logika (mind a mobil chip-ekből, mind a desktop rail-ből)
+  const selectDate = (date: string) => {
+    if (date === state.selected) return;
     state.selected = date;
 
-    // Hero frissítés (innerHTML a stabil wrapper-en — outerHTML helyett)
+    // Hero
     const heroWrapper = container.querySelector<HTMLElement>('#hero-wrapper')!;
     heroWrapper.innerHTML = renderHero(state);
 
-    // Chip-ek frissítés
+    // Mobil chip-ek
     scroller.innerHTML = state.dates.map((d) => renderDateChip(d, state)).join('');
 
-    // Result frissítés
+    // Desktop rail
+    if (rail) rail.innerHTML = renderDateRailItems(state);
+
+    // Résztvevő-lista
     const resultEl = container.querySelector<HTMLElement>('#result-main')!;
     resultEl.innerHTML = renderResult(state);
 
-    // Scroll csak a scroller-en belül
+    // Scroller középre görget
     requestAnimationFrame(() => scrollToSelected(true));
+  };
+
+  // Mobil scroller click
+  scroller.addEventListener('click', (e) => {
+    const target = (e.target as HTMLElement).closest<HTMLButtonElement>('.date-btn');
+    if (!target || target.getAttribute('aria-disabled') === 'true') return;
+    if (target.dataset.date) selectDate(target.dataset.date);
+  });
+
+  // Desktop rail click
+  rail?.addEventListener('click', (e) => {
+    const target = (e.target as HTMLElement).closest<HTMLButtonElement>('.date-rail-btn');
+    if (!target || target.getAttribute('aria-disabled') === 'true') return;
+    if (target.dataset.date) selectDate(target.dataset.date);
   });
 }
 

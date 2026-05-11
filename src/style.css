@@ -211,3 +211,17 @@ html, body {
 /* ─── Scrollbar elrejtés ─── */
 .no-scrollbar::-webkit-scrollbar { display: none; }
 .no-scrollbar { -ms-overflow-style: none; scrollbar-width: none; }
+
+/* ─── Desktop layout — lg+ (1024px+): phone shell eltűnik, teljes szélesség ─── */
+@media (min-width: 1024px) {
+  body {
+    background: var(--bg-page) !important;
+  }
+  .device {
+    max-width: 1200px;
+    border-radius: 0 !important;
+    box-shadow: none !important;
+    overflow: visible !important;
+    margin: 0 auto;
+  }
+}
