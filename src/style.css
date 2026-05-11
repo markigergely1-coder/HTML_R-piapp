@@ -1,0 +1,19 @@
+@import "tailwindcss";
+
+/* Röpi App alap design tokenek */
+@theme {
+  --color-brand-50: #fef2f2;
+  --color-brand-100: #fee2e2;
+  --color-brand-500: #ef4444;
+  --color-brand-600: #dc2626;
+  --color-brand-700: #b91c1c;
+
+  --font-display: "Inter", system-ui, "Segoe UI", sans-serif;
+}
+
+html, body {
+  margin: 0;
+  font-family: var(--font-display);
+  background: #fafafa;
+  color: #18181b;
+}
