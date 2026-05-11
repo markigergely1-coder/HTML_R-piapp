@@ -3,7 +3,17 @@
  * A kollekció nevek tükrözik a Python `modules/config.py` értékeit.
  */
 
-import { collection, getDocs, query, where } from 'firebase/firestore';
+import {
+  collection,
+  getDocs,
+  query,
+  where,
+  addDoc,
+  updateDoc,
+  deleteDoc,
+  doc,
+  orderBy,
+} from 'firebase/firestore';
 import { db } from './firebase';
 
 export const COLLECTIONS = {
@@ -107,6 +117,57 @@ export async function getAllAttendanceRecords(): Promise<RawAttendance[]> {
   });
   return records;
 }
+
+// ─────────────────────────────────────────────────────────────────
+// Members CRUD
+// ─────────────────────────────────────────────────────────────────
+
+export interface Member {
+  id: string;
+  name: string;
+  email: string;
+  active: boolean;
+}
+
+export async function getAllMembers(): Promise<Member[]> {
+  const snap = await getDocs(query(collection(db, COLLECTIONS.MEMBERS), orderBy('name')));
+  const members: Member[] = [];
+  snap.forEach((d) => {
+    const data = d.data();
+    members.push({
+      id: d.id,
+      name: (data.name ?? '').toString(),
+      email: (data.email ?? '').toString(),
+      active: data.active ?? true,
+    });
+  });
+  return members;
+}
+
+export async function addMember(input: { name: string; email: string; active: boolean }): Promise<string> {
+  const ref = await addDoc(collection(db, COLLECTIONS.MEMBERS), {
+    name: input.name.trim(),
+    email: input.email.trim(),
+    active: input.active,
+  });
+  return ref.id;
+}
+
+export async function updateMember(id: string, updates: Partial<Omit<Member, 'id'>>): Promise<void> {
+  const clean: Record<string, unknown> = {};
+  if (updates.name !== undefined) clean.name = updates.name.trim();
+  if (updates.email !== undefined) clean.email = updates.email.trim();
+  if (updates.active !== undefined) clean.active = updates.active;
+  await updateDoc(doc(db, COLLECTIONS.MEMBERS, id), clean);
+}
+
+export async function deleteMember(id: string): Promise<void> {
+  await deleteDoc(doc(db, COLLECTIONS.MEMBERS, id));
+}
+
+// ─────────────────────────────────────────────────────────────────
+// Cancelled sessions
+// ─────────────────────────────────────────────────────────────────
 
 /** Lemondott alkalmak: dátum → opcionális indoklás. */
 export async function getCancelledSessions(): Promise<Map<string, CancelledSession>> {

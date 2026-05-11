@@ -1,23 +1,213 @@
 @import "tailwindcss";
 
-/* Röpi App alap design tokenek */
+/* ─── Röpi App — Design Tokenek ─── */
 @theme {
-  --color-brand-50: #fef2f2;
+  --color-brand-50:  #fef2f2;
   --color-brand-100: #fee2e2;
+  --color-brand-200: #fecaca;
+  --color-brand-400: #f87171;
   --color-brand-500: #ef4444;
   --color-brand-600: #dc2626;
   --color-brand-700: #b91c1c;
 
   --font-display: "Inter", system-ui, "Segoe UI", sans-serif;
+  --font-mono:    "JetBrains Mono", ui-monospace, monospace;
 }
 
+/* ─── CSS változók — alapértelmezett téma (homok) ─── */
+:root {
+  --bg-page:  #f4f1ec;
+  --bg-card:  #ffffff;
+  --bg-elev:  #fbfaf7;
+  --bg-glass: rgba(252, 250, 247, 0.78);
+  --fg-1: #1d1c1a;
+  --fg-2: #57544e;
+  --fg-3: #a39e95;
+  --fg-4: #d4d4d8;
+  --line: #ebe7e0;
+  --line-strong: #d9d4ca;
+
+  --accent:      #ef4444;
+  --accent-soft: #fee2e2;
+  --accent-ink:  #b91c1c;
+
+  --hue-ring-1: #ef4444;
+  --hue-ring-2: #f59e0b;
+  --hue-ring-3: #10b981;
+
+  --radius:    22px;
+  --radius-sm: 14px;
+
+  --shadow-card: 0 1px 0 rgba(20,20,20,0.03), 0 4px 16px -8px rgba(20,20,20,0.08), 0 1px 2px rgba(20,20,20,0.04);
+  --shadow-lg:   0 30px 60px -30px rgba(20,20,20,0.25), 0 8px 24px -12px rgba(20,20,20,0.1);
+}
+
+/* ─── Alap ─── */
 html, body {
   margin: 0;
+  padding: 0;
   font-family: var(--font-display);
-  background: #fafafa;
-  color: #18181b;
+  background: var(--bg-page);
+  color: var(--fg-1);
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+  min-height: 100vh;
 }
 
-/* Horizontal scroll scrollbar elrejtése (dátum-gombok) */
+/* ─── Segédosztályok — szín ─── */
+.text-fg-1  { color: var(--fg-1); }
+.text-fg-2  { color: var(--fg-2); }
+.text-fg-3  { color: var(--fg-3); }
+.bg-page    { background: var(--bg-page); }
+.bg-card    { background: var(--bg-card); }
+.bg-elev    { background: var(--bg-elev); }
+.hairline         { border-color: var(--line); }
+.hairline-strong  { border-color: var(--line-strong); }
+
+/* ─── Kártya ─── */
+.card {
+  background: var(--bg-card);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow-card);
+}
+.card-soft {
+  background: var(--bg-elev);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+}
+
+/* ─── Frosted glass header ─── */
+.glass {
+  background: var(--bg-glass);
+  backdrop-filter: saturate(180%) blur(20px);
+  -webkit-backdrop-filter: saturate(180%) blur(20px);
+  border-bottom: 1px solid var(--line);
+}
+
+/* ─── Halo a hero mögött ─── */
+.halo {
+  position: absolute;
+  inset: -20% -20% auto -20%;
+  height: 70%;
+  background: radial-gradient(60% 80% at 50% 30%, color-mix(in oklab, var(--accent) 18%, transparent), transparent 70%);
+  filter: blur(20px);
+  pointer-events: none;
+  z-index: 0;
+}
+
+/* ─── Bar színek ─── */
+.bar-brand {
+  background: linear-gradient(180deg, color-mix(in oklab, var(--accent) 95%, white 5%) 0%, var(--accent) 100%);
+}
+.bar-emerald {
+  background: linear-gradient(180deg, #34d399 0%, #10b981 100%);
+}
+.bar-sky {
+  background: linear-gradient(180deg, #38bdf8 0%, #0ea5e9 100%);
+}
+.bar-empty {
+  background: color-mix(in oklab, var(--line-strong) 70%, transparent);
+}
+
+/* ─── Activity ring track ─── */
+.ring-track { stroke: color-mix(in oklab, var(--fg-3) 22%, transparent); }
+
+/* ─── Mono + tabular nums ─── */
+.font-mono-tnum {
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+  letter-spacing: -0.01em;
+}
+.tnum { font-variant-numeric: tabular-nums; }
+.num-display { font-feature-settings: "ss01" 1, "cv11" 1; letter-spacing: -0.04em; }
+
+/* ─── Eyebrow (kis felső cím) ─── */
+.eyebrow {
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--fg-3);
+}
+
+/* ─── Native-like select ─── */
+.select-native {
+  appearance: none;
+  -webkit-appearance: none;
+  background:
+    linear-gradient(45deg,  transparent 50%, var(--fg-3) 50%) calc(100% - 14px) 55% / 6px 6px no-repeat,
+    linear-gradient(135deg, var(--fg-3) 50%, transparent 50%) calc(100% -  8px) 55% / 6px 6px no-repeat,
+    var(--bg-card);
+  padding-right: 28px;
+}
+
+/* ─── Hover lift ─── */
+.lift { transition: transform 240ms cubic-bezier(0.22,1,0.36,1), box-shadow 240ms; }
+.lift:hover { transform: translateY(-2px); }
+
+/* ─── Device wrapper (mobil sim. asztali gépen) ─── */
+.device {
+  width: 100%;
+  max-width: 420px;
+  margin: 0 auto;
+  min-height: 100vh;
+  background: var(--bg-page);
+  position: relative;
+}
+@media (min-width: 640px) {
+  body {
+    background: radial-gradient(
+      1200px 800px at 20% 0%,
+      color-mix(in oklab, var(--accent) 6%, var(--bg-page)) 0%,
+      var(--bg-page) 60%
+    );
+  }
+  .device {
+    margin: 28px auto;
+    border-radius: 38px;
+    box-shadow: var(--shadow-lg), 0 0 0 1px var(--line);
+    overflow: hidden;
+    min-height: calc(100vh - 56px);
+  }
+}
+
+/* ─── Animációk ─── */
+@keyframes growBar {
+  from { transform: scaleY(0); }
+  to   { transform: scaleY(1); }
+}
+.bar-fill {
+  transform-origin: bottom;
+  animation: growBar 700ms cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+
+@keyframes ringDraw {
+  from { stroke-dashoffset: var(--from-offset); }
+  to   { stroke-dashoffset: var(--to-offset); }
+}
+.ring-arc {
+  animation: ringDraw 1100ms cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+
+@keyframes fadeUp {
+  from { opacity: 0; transform: translateY(8px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+.fade-up { animation: fadeUp 560ms cubic-bezier(0.22, 1, 0.36, 1) both; }
+
+/* ─── Noise overlay a premium kártyákon ─── */
+.noise::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='160' height='160'><filter id='n'><feTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='2' seed='3'/><feColorMatrix values='0 0 0 0 0  0 0 0 0 0  0 0 0 0 0  0 0 0 0.06 0'/></filter><rect width='100%' height='100%' filter='url(%23n)'/></svg>");
+  opacity: 0.7;
+  pointer-events: none;
+  mix-blend-mode: multiply;
+  border-radius: inherit;
+}
+
+/* ─── Scrollbar elrejtés ─── */
 .no-scrollbar::-webkit-scrollbar { display: none; }
 .no-scrollbar { -ms-overflow-style: none; scrollbar-width: none; }

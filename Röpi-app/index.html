@@ -1,0 +1,290 @@
+<!doctype html>
+<html lang="hu">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <title>Röpi — Játékos Profil</title>
+
+  <!-- Inter + JetBrains Mono for numerals -->
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet" />
+
+  <!-- Tailwind (CDN for prototype) -->
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script>
+    tailwind.config = {
+      theme: {
+        extend: {
+          fontFamily: {
+            sans: ['Inter', 'system-ui', 'sans-serif'],
+            mono: ['"JetBrains Mono"', 'ui-monospace', 'monospace'],
+          },
+          colors: {
+            brand: {
+              50:  '#fef2f2',
+              100: '#fee2e2',
+              200: '#fecaca',
+              400: '#f87171',
+              500: '#ef4444',
+              600: '#dc2626',
+              700: '#b91c1c',
+            },
+          },
+        },
+      },
+    };
+  </script>
+
+  <!-- React + Babel -->
+  <script src="https://unpkg.com/react@18.3.1/umd/react.development.js" integrity="sha384-hD6/rw4ppMLGNu3tX5cjIb+uRZ7UkRJ6BPkLpg4hAu/6onKUg4lLsHAs9EBPT82L" crossorigin="anonymous"></script>
+  <script src="https://unpkg.com/react-dom@18.3.1/umd/react-dom.development.js" integrity="sha384-u6aeetuaXnQ38mYT8rp6sbXaQe3NL9t+IBXmnYxwkUI2Hw4bsp2Wvmx4yRQF1uAm" crossorigin="anonymous"></script>
+  <script src="https://unpkg.com/@babel/standalone@7.29.0/babel.min.js" integrity="sha384-m08KidiNqLdpJqLq95G/LEi8Qvjl/xUYll3QILypMoQ65QorJ9Lvtp2RXYGBFj1y" crossorigin="anonymous"></script>
+
+  <style>
+    :root {
+      /* Default tokens; overwritten by theme classes on <body> */
+      --bg-page: #f4f1ec;
+      --bg-card: #ffffff;
+      --bg-elev: #fbfaf7;
+      --bg-glass: rgba(255,255,255,0.72);
+      --fg-1: #18181b;
+      --fg-2: #52525b;
+      --fg-3: #a1a1aa;
+      --fg-4: #d4d4d8;
+      --line: #ececea;
+      --line-strong: #d8d8d4;
+
+      --accent: #ef4444;     /* brand red */
+      --accent-soft: #fee2e2;
+      --accent-ink: #b91c1c;
+
+      --hue-ring-1: #ef4444;
+      --hue-ring-2: #f59e0b;
+      --hue-ring-3: #10b981;
+
+      --radius: 22px;
+      --radius-sm: 14px;
+
+      --shadow-card: 0 1px 0 rgba(20,20,20,0.03), 0 4px 16px -8px rgba(20,20,20,0.08), 0 1px 2px rgba(20,20,20,0.04);
+      --shadow-lg: 0 30px 60px -30px rgba(20,20,20,0.25), 0 8px 24px -12px rgba(20,20,20,0.1);
+
+      --font-sans: 'Inter', system-ui, sans-serif;
+      --font-mono: 'JetBrains Mono', ui-monospace, monospace;
+    }
+
+    /* Sand (default warm) */
+    body.theme-sand {
+      --bg-page: #f4f1ec;
+      --bg-card: #ffffff;
+      --bg-elev: #fbfaf7;
+      --bg-glass: rgba(252,250,247,0.72);
+      --fg-1: #1d1c1a;
+      --fg-2: #57544e;
+      --fg-3: #a39e95;
+      --line: #ebe7e0;
+      --line-strong: #d9d4ca;
+    }
+
+    /* Crisp light */
+    body.theme-light {
+      --bg-page: #f5f5f7;
+      --bg-card: #ffffff;
+      --bg-elev: #fbfbfd;
+      --bg-glass: rgba(255,255,255,0.78);
+      --fg-1: #0b0b0d;
+      --fg-2: #4b4b54;
+      --fg-3: #9494a0;
+      --line: #e9e9ee;
+      --line-strong: #d6d6dd;
+    }
+
+    /* Midnight */
+    body.theme-dark {
+      --bg-page: #0a0a0b;
+      --bg-card: #18181b;
+      --bg-elev: #111113;
+      --bg-glass: rgba(20,20,22,0.72);
+      --fg-1: #f5f5f7;
+      --fg-2: #b3b3b8;
+      --fg-3: #6e6e76;
+      --line: #27272a;
+      --line-strong: #3a3a3f;
+      --accent-soft: rgba(239,68,68,0.14);
+      --shadow-card: 0 1px 0 rgba(255,255,255,0.04), 0 4px 16px -8px rgba(0,0,0,0.6), 0 1px 2px rgba(0,0,0,0.4);
+    }
+
+    html, body { margin: 0; padding: 0; }
+    body {
+      font-family: var(--font-sans);
+      background: var(--bg-page);
+      color: var(--fg-1);
+      -webkit-font-smoothing: antialiased;
+      text-rendering: optimizeLegibility;
+      min-height: 100vh;
+    }
+    .font-mono-tnum { font-family: var(--font-mono); font-variant-numeric: tabular-nums; letter-spacing: -0.01em; }
+    .tnum { font-variant-numeric: tabular-nums; }
+    .num-display { font-feature-settings: "ss01" 1, "cv11" 1; letter-spacing: -0.04em; }
+
+    /* Soft inner card */
+    .card {
+      background: var(--bg-card);
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      box-shadow: var(--shadow-card);
+    }
+    .card-soft {
+      background: var(--bg-elev);
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+    }
+    .hairline { border-color: var(--line); }
+    .hairline-strong { border-color: var(--line-strong); }
+    .text-fg-1 { color: var(--fg-1); }
+    .text-fg-2 { color: var(--fg-2); }
+    .text-fg-3 { color: var(--fg-3); }
+    .bg-page { background: var(--bg-page); }
+    .bg-card { background: var(--bg-card); }
+    .bg-elev { background: var(--bg-elev); }
+
+    /* Frosted top bar */
+    .glass {
+      background: var(--bg-glass);
+      backdrop-filter: saturate(180%) blur(20px);
+      -webkit-backdrop-filter: saturate(180%) blur(20px);
+      border-bottom: 1px solid var(--line);
+    }
+
+    /* Halo behind hero */
+    .halo {
+      position: absolute; inset: -20% -20% auto -20%;
+      height: 70%;
+      background: radial-gradient(60% 80% at 50% 30%, color-mix(in oklab, var(--accent) 18%, transparent), transparent 70%);
+      filter: blur(20px);
+      pointer-events: none;
+      z-index: 0;
+    }
+
+    /* Bar gradients */
+    .bar-brand {
+      background: linear-gradient(180deg, color-mix(in oklab, var(--accent) 95%, white 5%) 0%, var(--accent) 100%);
+    }
+    .bar-emerald {
+      background: linear-gradient(180deg, #34d399 0%, #10b981 100%);
+    }
+    .bar-empty {
+      background: color-mix(in oklab, var(--line-strong) 70%, transparent);
+    }
+
+    /* Subtle noise for premium cards */
+    .noise::before {
+      content: ''; position: absolute; inset: 0;
+      background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='160' height='160'><filter id='n'><feTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='2' seed='3'/><feColorMatrix values='0 0 0 0 0  0 0 0 0 0  0 0 0 0 0  0 0 0 0.06 0'/></filter><rect width='100%' height='100%' filter='url(%23n)'/></svg>");
+      opacity: 0.7; pointer-events: none; mix-blend-mode: multiply;
+      border-radius: inherit;
+    }
+    body.theme-dark .noise::before { mix-blend-mode: screen; opacity: 0.5; }
+
+    /* Activity ring track */
+    .ring-track { stroke: color-mix(in oklab, var(--fg-3) 22%, transparent); }
+
+    /* Subtle motion */
+    @keyframes growBar {
+      from { transform: scaleY(0); }
+      to { transform: scaleY(1); }
+    }
+    .bar-fill { transform-origin: bottom; animation: growBar 700ms cubic-bezier(0.22, 1, 0.36, 1) both; }
+
+    @keyframes ringDraw {
+      from { stroke-dashoffset: var(--from-offset); }
+      to { stroke-dashoffset: var(--to-offset); }
+    }
+    .ring-arc { animation: ringDraw 1100ms cubic-bezier(0.22, 1, 0.36, 1) both; }
+
+    @keyframes fadeUp {
+      from { opacity: 0; transform: translateY(8px); }
+      to { opacity: 1; transform: translateY(0); }
+    }
+    .fade-up { animation: fadeUp 560ms cubic-bezier(0.22, 1, 0.36, 1) both; }
+
+    /* Native-like select */
+    .select-native {
+      appearance: none;
+      -webkit-appearance: none;
+      background:
+        linear-gradient(45deg, transparent 50%, var(--fg-3) 50%) calc(100% - 14px) 55% / 6px 6px no-repeat,
+        linear-gradient(135deg, var(--fg-3) 50%, transparent 50%) calc(100% - 8px) 55% / 6px 6px no-repeat,
+        var(--bg-card);
+      padding-right: 28px;
+    }
+
+    /* Tappable segmented */
+    .seg {
+      background: color-mix(in oklab, var(--fg-3) 12%, transparent);
+      border-radius: 11px;
+      padding: 3px;
+      display: inline-flex;
+      gap: 2px;
+    }
+    .seg button {
+      padding: 6px 12px;
+      font-size: 12px;
+      font-weight: 600;
+      color: var(--fg-2);
+      border-radius: 9px;
+      transition: all 180ms ease;
+    }
+    .seg button[aria-pressed="true"] {
+      background: var(--bg-card);
+      color: var(--fg-1);
+      box-shadow: 0 1px 2px rgba(0,0,0,0.06), 0 0 0 0.5px rgba(0,0,0,0.04);
+    }
+
+    /* Range scrollbar hide */
+    .no-scrollbar::-webkit-scrollbar { display: none; }
+    .no-scrollbar { -ms-overflow-style: none; scrollbar-width: none; }
+
+    /* Phone shell on wider viewports */
+    .device {
+      width: 100%;
+      max-width: 420px;
+      margin: 0 auto;
+      min-height: 100vh;
+      background: var(--bg-page);
+      position: relative;
+    }
+    @media (min-width: 640px) {
+      body { background: radial-gradient(1200px 800px at 20% 0%, color-mix(in oklab, var(--accent) 6%, var(--bg-page)) 0%, var(--bg-page) 60%); }
+      .device {
+        margin: 28px auto;
+        border-radius: 38px;
+        box-shadow: var(--shadow-lg), 0 0 0 1px var(--line);
+        overflow: hidden;
+        min-height: calc(100vh - 56px);
+      }
+    }
+
+    /* Apple-like footnote text */
+    .eyebrow {
+      font-size: 11px;
+      font-weight: 600;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+      color: var(--fg-3);
+    }
+
+    /* Hover lift */
+    .lift { transition: transform 240ms cubic-bezier(0.22,1,0.36,1), box-shadow 240ms; }
+    .lift:hover { transform: translateY(-2px); }
+  </style>
+</head>
+<body class="theme-sand">
+  <div id="root"></div>
+
+  <script type="text/babel" src="tweaks-panel.jsx"></script>
+  <script type="text/babel" src="data.jsx"></script>
+  <script type="text/babel" src="components.jsx"></script>
+  <script type="text/babel" src="app.jsx"></script>
+</body>
+</html>

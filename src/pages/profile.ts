@@ -1,25 +1,15 @@
 /**
- * 📊 Játékos Profil oldal.
- * - Játékos + év kiválasztó
- * - Hero kártya (avatar + név + összegzés)
- * - 4 stat kártya
- * - Pénzügyi összesítő (becsült összegek)
- * - Éves bar chart (CSS-alapú)
- * - Havi bar chart (CSS-alapú)
- * - Utolsó 10 alkalom
+ * 📊 Játékos Profil oldal — Claude Design implementáció.
+ * Activity rings, hero kártya, stat grid, pénzügy, éves/havi chart, timeline.
  */
 
 import { renderHeader } from '../components/header';
 import { getAllAttendanceRecords, type RawAttendance } from '../lib/firestore';
-import { getInitials, getAvatarColor } from '../lib/avatar';
-import { estimateCost, formatHuf, formatNumber } from '../lib/cost';
+import { getInitials } from '../lib/avatar';
+import { estimateCost, formatHuf } from '../lib/cost';
 import { formatDateHuLong } from '../lib/dates';
 
-interface ProfileSession {
-  date: string;
-  year: number;
-  month: number;
-}
+interface ProfileSession { date: string; year: number; month: number; }
 
 interface ProfileState {
   allRecords: RawAttendance[];
@@ -32,437 +22,436 @@ interface ProfileState {
   playerSessions: ProfileSession[];
 }
 
-const MONTH_NAMES_SHORT = [
-  'Jan', 'Feb', 'Már', 'Ápr', 'Máj', 'Jún',
-  'Júl', 'Aug', 'Szep', 'Okt', 'Nov', 'Dec',
-];
+const MONTH_SHORT = ['Jan','Feb','Már','Ápr','Máj','Jún','Júl','Aug','Szep','Okt','Nov','Dec'];
 
-// ─────────────────────────────────────────────────────────────────────
-// Belépési pont
-// ─────────────────────────────────────────────────────────────────────
+// ─── Avatar szín determinisztikusan névből ───
+function avatarHue(name: string): number {
+  let h = 0;
+  for (const c of name) h = (h * 31 + c.charCodeAt(0)) & 0xffffffff;
+  return Math.abs(h) % 360;
+}
 
+// ─── Belépési pont ───
 export async function renderProfilePage(container: HTMLElement): Promise<void> {
   container.innerHTML = renderShell(renderLoadingBody());
-
   const allRecords = await getAllAttendanceRecords();
   const playerNames = uniqueSorted(allRecords.map((r) => r.name));
   if (playerNames.length === 0) {
-    container.querySelector<HTMLElement>('#profile-body')!.innerHTML = renderEmptyAllState();
+    container.querySelector<HTMLElement>('#profile-body')!.innerHTML = renderEmptyState();
     return;
   }
-
-  // Elérhető évek a Yes records dátumából
   const availableYears = uniqueSorted(
-    allRecords
-      .filter((r) => r.status === 'Yes' && r.event_date)
-      .map((r) => Number(r.event_date.slice(0, 4)))
-      .filter((y) => Number.isFinite(y))
-      .map(String),
-  )
-    .map(Number)
-    .sort((a, b) => b - a);
+    allRecords.filter((r) => r.status === 'Yes' && r.event_date)
+      .map((r) => Number(r.event_date.slice(0, 4))).filter(Number.isFinite).map(String),
+  ).map(Number).sort((a, b) => b - a);
 
   const now = new Date();
   const currentYear = now.getFullYear();
   const currentMonth = now.getMonth() + 1;
-
   const state: ProfileState = {
-    allRecords,
-    playerNames,
+    allRecords, playerNames,
     availableYears: availableYears.length ? availableYears : [currentYear],
-    currentYear,
-    currentMonth,
+    currentYear, currentMonth,
     selectedName: playerNames[0],
     selectedYear: availableYears.includes(currentYear) ? currentYear : availableYears[0] || currentYear,
     playerSessions: [],
   };
-
   recomputePlayerSessions(state);
-
-  // Render selectors header, then body
   container.innerHTML = renderShell(renderBody(state));
   attachHandlers(container, state);
 }
 
-// ─────────────────────────────────────────────────────────────────────
-// Page shell + loading
-// ─────────────────────────────────────────────────────────────────────
-
+// ─── Shell ───
 function renderShell(body: string): string {
   return `
-    <div class="bg-zinc-50 min-h-screen pb-12">
-      <div class="max-w-md mx-auto">
-        ${renderHeader('profile')}
-        <main id="profile-body">${body}</main>
-      </div>
-    </div>
-  `;
+    <div class="device">
+      ${renderHeader('profile')}
+      <main id="profile-body">${body}</main>
+    </div>`;
 }
 
 function renderLoadingBody(): string {
   return `
-    <div class="px-4 py-6 space-y-4">
-      <div class="h-12 bg-zinc-100 rounded-2xl animate-pulse"></div>
-      <div class="h-24 bg-zinc-100 rounded-2xl animate-pulse"></div>
-      <div class="grid grid-cols-2 gap-2">
-        <div class="h-20 bg-zinc-100 rounded-2xl animate-pulse"></div>
-        <div class="h-20 bg-zinc-100 rounded-2xl animate-pulse"></div>
-        <div class="h-20 bg-zinc-100 rounded-2xl animate-pulse"></div>
-        <div class="h-20 bg-zinc-100 rounded-2xl animate-pulse"></div>
+    <div class="px-5 pt-5 space-y-4">
+      <div class="h-12 rounded-2xl animate-pulse" style="background:var(--line)"></div>
+      <div class="h-36 rounded-[28px] animate-pulse" style="background:var(--line)"></div>
+      <div class="grid grid-cols-2 gap-2.5">
+        <div class="h-20 rounded-[22px] animate-pulse" style="background:var(--line)"></div>
+        <div class="h-20 rounded-[22px] animate-pulse" style="background:var(--line)"></div>
+        <div class="h-20 rounded-[22px] animate-pulse" style="background:var(--line)"></div>
+        <div class="h-20 rounded-[22px] animate-pulse" style="background:var(--line)"></div>
       </div>
-      <div class="h-40 bg-zinc-100 rounded-2xl animate-pulse"></div>
-      <div class="h-56 bg-zinc-100 rounded-2xl animate-pulse"></div>
-      <div class="h-56 bg-zinc-100 rounded-2xl animate-pulse"></div>
-    </div>
-  `;
+      <div class="h-48 rounded-[24px] animate-pulse" style="background:var(--line)"></div>
+    </div>`;
 }
 
-function renderEmptyAllState(): string {
+function renderEmptyState(): string {
   return `
     <div class="flex flex-col items-center justify-center py-20 px-6 text-center gap-3">
-      <div class="w-16 h-16 rounded-2xl bg-zinc-100 flex items-center justify-center">
+      <div class="w-16 h-16 rounded-2xl flex items-center justify-center" style="background:var(--line)">
         <span class="text-2xl">👥</span>
       </div>
-      <p class="text-[16px] font-semibold text-zinc-700">Nincs még játékos</p>
-      <p class="text-[13px] text-zinc-500">Először regisztrálj egy alkalomra!</p>
-    </div>
-  `;
+      <p class="text-[16px] font-semibold text-fg-1">Nincs még játékos</p>
+      <p class="text-[13px] text-fg-3">Először regisztrálj egy alkalomra!</p>
+    </div>`;
 }
 
-// ─────────────────────────────────────────────────────────────────────
-// Body — kiválasztó + szekciók
-// ─────────────────────────────────────────────────────────────────────
-
+// ─── Body ───
 function renderBody(state: ProfileState): string {
   return `
-    <div class="px-4 py-5 space-y-5">
+    <div class="px-5 pt-5 pb-12 space-y-5">
       ${renderSelectors(state)}
-      ${renderHero(state)}
-      ${renderStats(state)}
-      ${renderFinancialCard(state)}
+      ${renderHeroRings(state)}
+      ${renderStatGrid(state)}
+      ${renderFinancial(state)}
       ${renderYearlyChart(state)}
       ${renderMonthlyChart(state)}
       ${renderRecent(state)}
-    </div>
-  `;
+    </div>`;
 }
 
+// ─── Selectors ───
 function renderSelectors(state: ProfileState): string {
-  const nameOptions = state.playerNames
-    .map((n) => `<option value="${escapeAttr(n)}" ${n === state.selectedName ? 'selected' : ''}>${escapeHtml(n)}</option>`)
+  const nameOpts = state.playerNames
+    .map((n) => `<option value="${ea(n)}" ${n === state.selectedName ? 'selected' : ''}>${eh(n)}</option>`)
     .join('');
-  const yearOptions = state.availableYears
+  const yearOpts = state.availableYears
     .map((y) => `<option value="${y}" ${y === state.selectedYear ? 'selected' : ''}>${y}</option>`)
     .join('');
-
   return `
-    <div class="grid grid-cols-[1fr_auto] gap-2">
-      <label class="block">
-        <span class="text-[10px] font-semibold text-zinc-400 uppercase tracking-wider block mb-1">👤 Játékos</span>
+    <div class="grid grid-cols-[1fr_auto] gap-2.5 fade-up">
+      <label class="flex flex-col gap-1.5">
+        <span class="eyebrow">Játékos</span>
         <select id="player-select"
-          class="w-full rounded-xl border border-zinc-200 bg-white px-3 py-2.5 text-[14px] font-medium text-zinc-900 shadow-sm focus:outline-none focus:ring-2 focus:ring-brand-500 focus:border-brand-500">
-          ${nameOptions}
+          class="select-native w-full rounded-[14px] border px-3.5 py-3 text-[15px] font-medium text-fg-1 focus:outline-none"
+          style="border-color:var(--line-strong); background:var(--bg-card)">
+          ${nameOpts}
         </select>
       </label>
-      <label class="block">
-        <span class="text-[10px] font-semibold text-zinc-400 uppercase tracking-wider block mb-1">📅 Év</span>
+      <label class="flex flex-col gap-1.5">
+        <span class="eyebrow">Év</span>
         <select id="year-select"
-          class="w-full rounded-xl border border-zinc-200 bg-white px-3 py-2.5 text-[14px] font-medium text-zinc-900 shadow-sm focus:outline-none focus:ring-2 focus:ring-brand-500 focus:border-brand-500">
-          ${yearOptions}
+          class="select-native rounded-[14px] border px-3.5 py-3 text-[15px] font-medium text-fg-1 focus:outline-none"
+          style="border-color:var(--line-strong); background:var(--bg-card)">
+          ${yearOpts}
         </select>
       </label>
-    </div>
-  `;
+    </div>`;
 }
 
-function renderHero(state: ProfileState): string {
+// ─── Hero + Activity Rings ───
+function renderHeroRings(state: ProfileState): string {
   const total = state.playerSessions.length;
-  const { bg, text } = getAvatarColor(state.selectedName);
-  const initials = getInitials(state.selectedName);
-  return `
-    <div class="bg-white rounded-2xl border border-zinc-200 shadow-sm p-5 flex items-center gap-4">
-      <div class="w-16 h-16 rounded-full ${bg} flex items-center justify-center flex-shrink-0">
-        <span class="text-xl font-bold ${text}">${escapeHtml(initials)}</span>
-      </div>
-      <div class="min-w-0 flex-1">
-        <p class="text-[18px] font-bold text-zinc-900 truncate">${escapeHtml(state.selectedName)}</p>
-        <p class="text-[13px] text-zinc-500 mt-0.5">
-          ${total > 0 ? `Összesen <span class="font-semibold text-zinc-700">${total}</span> alkalmon vett részt` : 'Még nincs részvétele'}
-        </p>
-      </div>
-    </div>
-  `;
-}
-
-function renderStats(state: ProfileState): string {
-  const total = state.playerSessions.length;
-  const thisYearCount = state.playerSessions.filter((s) => s.year === state.currentYear).length;
-  const thisMonthCount = state.playerSessions.filter(
-    (s) => s.year === state.currentYear && s.month === state.currentMonth,
+  const yearCount = state.playerSessions.filter((s) => s.year === state.selectedYear).length;
+  const monthCount = state.playerSessions.filter(
+    (s) => s.year === state.currentYear && s.month === state.currentMonth
   ).length;
-  const yearCount = state.playerSessions.filter((s) => s.year === state.selectedYear).length;
 
-  const monthLabel = `${state.currentYear}/${String(state.currentMonth).padStart(2, '0')}`;
+  const yearGoal = 40; const monthGoal = 4; const careerGoal = 100;
+  const cp = Math.min(1, total / careerGoal);
+  const yp = Math.min(1, yearCount / yearGoal);
+  const mp = Math.min(1, monthCount / monthGoal);
 
-  const cards = [
-    { icon: '🏆', label: 'Összes', value: total, accent: 'brand' },
-    { icon: '📅', label: `${state.currentYear}`, value: thisYearCount, accent: 'sky' },
-    { icon: '🗓️', label: monthLabel, value: thisMonthCount, accent: 'emerald' },
-    { icon: '📌', label: `${state.selectedYear}`, value: yearCount, accent: 'violet' },
-  ];
+  const initials = getInitials(state.selectedName);
+  const hue = avatarHue(state.selectedName);
 
-  const accentClass = (a: string) =>
-    ({
-      brand: 'bg-brand-50 text-brand-700',
-      sky: 'bg-sky-50 text-sky-700',
-      emerald: 'bg-emerald-50 text-emerald-700',
-      violet: 'bg-violet-50 text-violet-700',
-    })[a] ?? 'bg-zinc-50 text-zinc-700';
+  const ring = (size: number, stroke: number, progress: number, color: string, delay: number, offset: number) => {
+    const r = (size - stroke) / 2 - offset;
+    const c = 2 * Math.PI * r;
+    const dash = c * progress;
+    return `
+      <svg width="${size}" height="${size}" viewBox="0 0 ${size} ${size}" class="absolute inset-0">
+        <circle cx="${size/2}" cy="${size/2}" r="${r}" fill="none" stroke-width="${stroke}" class="ring-track" stroke-linecap="round"/>
+        <circle cx="${size/2}" cy="${size/2}" r="${r}" fill="none" stroke="${color}" stroke-width="${stroke}"
+          stroke-linecap="round"
+          stroke-dasharray="${dash} ${c}"
+          transform="rotate(-90 ${size/2} ${size/2})"
+          class="ring-arc"
+          style="--from-offset:${c};--to-offset:0;animation-delay:${delay}ms;stroke-dashoffset:0"/>
+      </svg>`;
+  };
+
+  const ringStat = (color: string, label: string, value: number, sub: string, border = false) => `
+    <div class="px-3 py-3 ${border ? 'border-l border-r' : ''}" style="border-color:var(--line)">
+      <div class="flex items-center gap-1.5 mb-1">
+        <span class="w-1.5 h-1.5 rounded-full" style="background:${color}"></span>
+        <span class="eyebrow text-[10px]">${label}</span>
+      </div>
+      <p class="leading-none">
+        <span class="font-mono-tnum font-semibold text-[20px] text-fg-1 num-display">${value}</span>
+        <span class="font-mono-tnum text-[11px] text-fg-3 ml-1">${sub}</span>
+      </p>
+    </div>`;
 
   return `
-    <div class="grid grid-cols-2 sm:grid-cols-4 gap-2">
-      ${cards
-        .map(
-          (c) => `
-        <div class="bg-white rounded-2xl border border-zinc-200 shadow-sm p-3.5">
-          <div class="flex items-center gap-2 mb-2">
-            <span class="w-7 h-7 rounded-lg flex items-center justify-center text-sm ${accentClass(c.accent)}">${c.icon}</span>
-            <span class="text-[10px] font-semibold text-zinc-500 uppercase tracking-wider truncate">${c.label}</span>
+    <section class="relative fade-up" style="animation-delay:40ms">
+      <div class="halo"></div>
+      <div class="relative card noise lift overflow-hidden" style="border-radius:28px">
+        <div class="relative p-5 flex items-center gap-5">
+          <div class="relative flex-shrink-0" style="width:124px;height:124px">
+            ${ring(124, 9, cp, 'var(--hue-ring-1)', 0,   0)}
+            ${ring(102, 9, yp, 'var(--hue-ring-2)', 120, 11)}
+            ${ring(80,  9, mp, 'var(--hue-ring-3)', 240, 22)}
+            <div class="absolute inset-0 flex items-center justify-center">
+              <div class="w-[54px] h-[54px] rounded-full flex items-center justify-center font-semibold text-[18px]"
+                   style="background:linear-gradient(135deg,hsl(${hue} 80% 88%) 0%,hsl(${(hue+30)%360} 75% 78%) 100%);color:hsl(${hue} 60% 30%)">
+                ${eh(initials)}
+              </div>
+            </div>
           </div>
-          <p class="text-[24px] font-bold text-zinc-900 leading-none">${c.value}</p>
-        </div>`,
-        )
-        .join('')}
-    </div>
-  `;
-}
-
-function renderFinancialCard(state: ProfileState): string {
-  const yearCount = state.playerSessions.filter((s) => s.year === state.selectedYear).length;
-  if (yearCount === 0) {
-    return `
-      <div class="bg-white rounded-2xl border border-zinc-200 shadow-sm p-5">
-        <h2 class="text-[11px] font-semibold text-zinc-400 uppercase tracking-wider mb-3">💰 Pénzügy — ${state.selectedYear}</h2>
-        <div class="text-center py-6 text-[13px] text-zinc-400">
-          ${state.selectedYear}-ben nincs részvétele — nincs számolnivaló.
+          <div class="flex-1 min-w-0">
+            <p class="eyebrow mb-1">Játékos · ${state.selectedYear}</p>
+            <h1 class="text-[26px] font-bold tracking-tight leading-[1.05] text-fg-1 truncate">${eh(state.selectedName)}</h1>
+            <p class="text-[13px] text-fg-2 mt-1.5">
+              <span class="font-mono-tnum font-semibold text-fg-1">${total}</span> alkalom összesen
+            </p>
+          </div>
+        </div>
+        <div class="grid grid-cols-3 border-t hairline">
+          ${ringStat('var(--hue-ring-1)', 'Karrier', total,      `/ ${careerGoal}`)}
+          ${ringStat('var(--hue-ring-2)', 'Idei év', yearCount,  `/ ${yearGoal}`, true)}
+          ${ringStat('var(--hue-ring-3)', 'Ez a hó', monthCount, `/ ${monthGoal}`)}
         </div>
       </div>
-    `;
-  }
+    </section>`;
+}
+
+// ─── Stat Grid ───
+function renderStatGrid(state: ProfileState): string {
+  const total      = state.playerSessions.length;
+  const thisYear   = state.playerSessions.filter((s) => s.year === state.currentYear).length;
+  const thisMonth  = state.playerSessions.filter(
+    (s) => s.year === state.currentYear && s.month === state.currentMonth
+  ).length;
+  const selYear    = state.playerSessions.filter((s) => s.year === state.selectedYear).length;
+  const monthLabel = `${state.currentYear}/${String(state.currentMonth).padStart(2,'0')}`;
+
+  const TONE: Record<string,{dot:string;tint:string}> = {
+    red:     { dot:'#ef4444', tint:'rgba(239,68,68,0.10)' },
+    amber:   { dot:'#f59e0b', tint:'rgba(245,158,11,0.10)' },
+    emerald: { dot:'#10b981', tint:'rgba(16,185,129,0.10)' },
+    violet:  { dot:'#8b5cf6', tint:'rgba(139,92,246,0.10)' },
+  };
+
+  const card = (label: string, value: number, tone: string) => {
+    const t = TONE[tone];
+    return `
+      <div class="card relative p-3.5 overflow-hidden lift">
+        <div class="absolute -top-3 -right-3 w-14 h-14 rounded-full" style="background:${t.tint};filter:blur(8px)"></div>
+        <div class="relative flex items-center justify-between mb-3">
+          <span class="eyebrow text-[10px] truncate">${label}</span>
+          <span class="w-1.5 h-1.5 rounded-full" style="background:${t.dot}"></span>
+        </div>
+        <p class="relative font-mono-tnum font-semibold text-[28px] leading-none num-display text-fg-1">${value}</p>
+      </div>`;
+  };
+
+  return `
+    <section class="fade-up" style="animation-delay:80ms">
+      <div class="grid grid-cols-2 sm:grid-cols-4 gap-2.5">
+        ${card('Összes', total, 'red')}
+        ${card(String(state.currentYear), thisYear, 'amber')}
+        ${card(monthLabel, thisMonth, 'emerald')}
+        ${card(String(state.selectedYear), selYear, 'violet')}
+      </div>
+    </section>`;
+}
+
+// ─── Financial ───
+function renderFinancial(state: ProfileState): string {
+  const yearCount = state.playerSessions.filter((s) => s.year === state.selectedYear).length;
+  if (yearCount === 0) return '';
 
   const est = estimateCost(yearCount, state.selectedYear);
+
   return `
-    <div class="bg-white rounded-2xl border border-zinc-200 shadow-sm overflow-hidden">
-      <div class="px-5 pt-5 pb-3">
-        <h2 class="text-[11px] font-semibold text-zinc-400 uppercase tracking-wider">💰 Becsült fizetendő — ${state.selectedYear}</h2>
+    <section class="fade-up" style="animation-delay:120ms">
+      <div class="flex items-end justify-between mb-3">
+        <h2 class="text-[20px] font-semibold tracking-tight text-fg-1">Pénzügy</h2>
+        <span class="eyebrow">${state.selectedYear}</span>
       </div>
-      <!-- Precise -->
-      <div class="px-5 pb-4">
-        <div class="bg-gradient-to-br from-sky-50 to-sky-100/50 border border-sky-200 rounded-xl p-4">
-          <div class="flex items-baseline justify-between mb-1">
-            <span class="text-[11px] font-semibold text-sky-700 uppercase tracking-wider">Pontosabb becslés</span>
-            <span class="text-[10px] text-sky-600/80">${formatNumber(est.hourlyRate)} Ft/h · ${est.duration}h · ${est.avgAttendees.toFixed(0)} fő</span>
+      <div class="card relative p-5 overflow-hidden lift" style="border-radius:24px">
+        <div class="absolute inset-0 opacity-90"
+             style="background:radial-gradient(120% 80% at 90% 0%,rgba(56,189,248,0.18) 0%,transparent 60%)"></div>
+        <div class="relative">
+          <div class="flex items-center justify-between">
+            <span class="eyebrow">Becsült összeg</span>
+            <span class="text-[10px] font-mono-tnum text-fg-3">${est.hourlyRate.toLocaleString('hu-HU')} Ft/h · ${est.duration}h · ${Math.round(est.avgAttendees)} fő</span>
           </div>
-          <p class="text-[28px] font-bold text-sky-900 leading-tight">${formatHuf(est.precise)}</p>
-          <p class="text-[11px] text-sky-700/70 mt-1">
-            ≈ ${formatHuf(est.costPerSessionPrecise)} / alkalom · ${yearCount} alkalom
+          <p class="font-mono-tnum num-display font-semibold text-[44px] leading-none mt-2 text-fg-1">
+            ~${formatHuf(est.precise)}
           </p>
-        </div>
-      </div>
-      <!-- Simple -->
-      <div class="px-5 pb-5">
-        <div class="bg-emerald-50/60 border border-emerald-100 rounded-xl p-3">
-          <div class="flex items-baseline justify-between">
+          <p class="text-[12px] text-fg-2 mt-2 font-mono-tnum">
+            ${formatHuf(est.costPerSessionPrecise)} / alkalom · ${yearCount} alkalom
+          </p>
+          <div class="mt-4 pt-4 border-t hairline flex items-center justify-between">
             <div>
-              <p class="text-[10px] font-semibold text-emerald-700 uppercase tracking-wider">Egyszerű becslés</p>
-              <p class="text-[10px] text-emerald-600/70">2 300 Ft × ${yearCount} alkalom</p>
+              <p class="eyebrow text-[10px] mb-0.5">Egyszerű becslés</p>
+              <p class="text-[11px] text-fg-3 font-mono-tnum">2 300 Ft × ${yearCount}</p>
             </div>
-            <p class="text-[20px] font-bold text-emerald-700">${formatHuf(est.simple)}</p>
+            <p class="font-mono-tnum font-semibold text-[18px] num-display text-fg-1">${formatHuf(est.simple)}</p>
           </div>
         </div>
       </div>
-    </div>
-  `;
+    </section>`;
 }
 
+// ─── Éves Chart ───
 function renderYearlyChart(state: ProfileState): string {
-  // Year → count
   const byYear = new Map<number, number>();
-  for (const s of state.playerSessions) {
-    byYear.set(s.year, (byYear.get(s.year) ?? 0) + 1);
-  }
+  for (const s of state.playerSessions) byYear.set(s.year, (byYear.get(s.year) ?? 0) + 1);
   const years = [...byYear.keys()].sort((a, b) => a - b);
-  if (years.length === 0) {
-    return chartCardEmpty('📈 Éves összesítő', 'Nincs még részvétel.');
-  }
+  if (years.length === 0) return chartEmpty('Éves összesítő', 'Nincs még részvétel.');
   const max = Math.max(...byYear.values());
-  const BAR_AREA = 140; // px
+  const BAR = 140;
 
-  const bars = years
-    .map((y) => {
-      const count = byYear.get(y) ?? 0;
-      const h = max > 0 ? Math.max(4, Math.round((count / max) * BAR_AREA)) : 4;
-      const isSelected = y === state.selectedYear;
-      const barColor = isSelected ? 'bg-brand-500' : 'bg-sky-400';
-      return `
-        <div class="flex flex-col items-center gap-1.5 flex-1 min-w-0">
-          <span class="text-[11px] font-bold ${isSelected ? 'text-brand-700' : 'text-zinc-600'}">${count}</span>
-          <div class="w-full max-w-[44px] rounded-t-lg ${barColor} transition-all" style="height: ${h}px"></div>
-          <span class="text-[11px] ${isSelected ? 'font-semibold text-brand-700' : 'text-zinc-500'}">${y}</span>
-        </div>`;
-    })
-    .join('');
-
-  return `
-    <div class="bg-white rounded-2xl border border-zinc-200 shadow-sm p-5">
-      <h2 class="text-[11px] font-semibold text-zinc-400 uppercase tracking-wider mb-4">📈 Éves összesítő</h2>
-      <div class="flex items-end gap-3 px-1" style="min-height: ${BAR_AREA + 36}px">
-        ${bars}
-      </div>
-    </div>
-  `;
-}
-
-function renderMonthlyChart(state: ProfileState): string {
-  // Month → count for selected year
-  const byMonth = new Array(12).fill(0);
-  for (const s of state.playerSessions) {
-    if (s.year === state.selectedYear) {
-      byMonth[s.month - 1]++;
-    }
-  }
-  const max = Math.max(...byMonth);
-  const total = byMonth.reduce((a, b) => a + b, 0);
-  if (total === 0) {
-    return chartCardEmpty(`🗂️ Havi bontás — ${state.selectedYear}`, `${state.selectedYear}-ben nincs részvétel.`);
-  }
-  const BAR_AREA = 110;
-
-  const bars = MONTH_NAMES_SHORT.map((mn, i) => {
-    const count = byMonth[i];
-    const h = max > 0 ? Math.max(2, Math.round((count / max) * BAR_AREA)) : 2;
-    const isCurrent =
-      state.selectedYear === state.currentYear && i + 1 === state.currentMonth;
-    const barColor =
-      count === 0
-        ? 'bg-zinc-200'
-        : isCurrent
-          ? 'bg-emerald-500'
-          : 'bg-emerald-400';
+  const bars = years.map((y, i) => {
+    const v = byYear.get(y) ?? 0;
+    const h = Math.max(8, Math.round((v / max) * BAR));
+    const sel = y === state.selectedYear;
     return `
-      <div class="flex flex-col items-center gap-1 flex-1 min-w-0">
-        <span class="text-[10px] font-bold ${count > 0 ? 'text-zinc-700' : 'text-zinc-300'}">${count}</span>
-        <div class="w-full max-w-[22px] rounded-t-md ${barColor} transition-all" style="height: ${h}px"></div>
-        <span class="text-[9px] text-zinc-500 truncate">${mn}</span>
+      <div class="flex-1 flex flex-col items-center gap-2 min-w-0">
+        <span class="font-mono-tnum text-[12px] ${sel ? 'font-semibold text-fg-1' : 'text-fg-2'}">${v}</span>
+        <div class="w-full max-w-[52px] relative">
+          <div class="bar-fill w-full rounded-t-[10px] ${sel ? 'bar-brand' : ''}"
+               style="height:${h}px;animation-delay:${i*80}ms;${sel ? '' : 'background:color-mix(in oklab,var(--line-strong) 70%,transparent)'}"></div>
+        </div>
+        <span class="text-[11px] font-mono-tnum ${sel ? 'font-semibold text-fg-1' : 'text-fg-3'}">${y}</span>
       </div>`;
   }).join('');
 
   return `
-    <div class="bg-white rounded-2xl border border-zinc-200 shadow-sm p-5">
-      <h2 class="text-[11px] font-semibold text-zinc-400 uppercase tracking-wider mb-4">🗂️ Havi bontás — ${state.selectedYear}</h2>
-      <div class="flex items-end gap-1.5" style="min-height: ${BAR_AREA + 32}px">
-        ${bars}
+    <section class="fade-up" style="animation-delay:160ms">
+      <div class="flex items-end justify-between mb-3">
+        <h2 class="text-[20px] font-semibold tracking-tight text-fg-1">Éves összesítő</h2>
+        <span class="eyebrow">${years[0]}–${years[years.length-1]}</span>
       </div>
-    </div>
-  `;
+      <div class="card p-5" style="border-radius:24px">
+        <div class="flex items-end gap-4" style="min-height:${BAR+44}px">${bars}</div>
+      </div>
+    </section>`;
 }
 
-function chartCardEmpty(title: string, msg: string): string {
-  return `
-    <div class="bg-white rounded-2xl border border-zinc-200 shadow-sm p-5">
-      <h2 class="text-[11px] font-semibold text-zinc-400 uppercase tracking-wider mb-3">${title}</h2>
-      <p class="text-center py-6 text-[13px] text-zinc-400">${msg}</p>
-    </div>
-  `;
-}
-
-function renderRecent(state: ProfileState): string {
-  if (state.playerSessions.length === 0) {
-    return chartCardEmpty('🕐 Utolsó alkalmak', 'Nincs még regisztrált alkalom.');
+// ─── Havi Chart ───
+function renderMonthlyChart(state: ProfileState): string {
+  const byMonth = new Array(12).fill(0);
+  for (const s of state.playerSessions) {
+    if (s.year === state.selectedYear) byMonth[s.month - 1]++;
   }
-  const recent = state.playerSessions.slice(0, 10); // already sorted desc
-  const items = recent
-    .map((s) => {
-      const isCurrentMonth = s.year === state.currentYear && s.month === state.currentMonth;
-      return `
-        <li class="flex items-center gap-3 py-2.5 px-3 hover:bg-zinc-50 transition-colors">
-          <div class="w-9 h-9 rounded-lg ${isCurrentMonth ? 'bg-emerald-50 text-emerald-700' : 'bg-zinc-100 text-zinc-500'} flex items-center justify-center flex-shrink-0">
-            <svg xmlns="http://www.w3.org/2000/svg" class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
-              <path stroke-linecap="round" stroke-linejoin="round" d="M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z" />
-            </svg>
-          </div>
-          <span class="text-[13px] font-medium text-zinc-800 flex-1">${escapeHtml(formatDateHuLong(s.date))}</span>
-        </li>`;
-    })
-    .join('');
+  const max = Math.max(...byMonth);
+  const total = byMonth.reduce((a, b) => a + b, 0);
+  if (total === 0) return chartEmpty(`Havi bontás — ${state.selectedYear}`, `${state.selectedYear}-ben nincs részvétel.`);
+  const BAR = 100;
+
+  const bars = byMonth.map((v, i) => {
+    const h = max > 0 ? Math.max(4, Math.round((v / max) * BAR)) : 4;
+    const isCurrent = state.selectedYear === state.currentYear && i + 1 === state.currentMonth;
+    const empty = v === 0;
+    const cls = empty ? 'bar-empty' : isCurrent ? 'bar-brand' : 'bar-emerald';
+    return `
+      <div class="flex-1 flex flex-col items-center gap-1.5 min-w-0">
+        <span class="text-[10px] font-mono-tnum ${empty ? 'text-fg-3 opacity-60' : 'font-semibold text-fg-1'}">${v || '·'}</span>
+        <div class="bar-fill w-full max-w-[20px] rounded-t-[6px] ${cls}"
+             style="height:${h}px;animation-delay:${i*40}ms"></div>
+        <span class="text-[10px] text-fg-3">${MONTH_SHORT[i]}</span>
+      </div>`;
+  }).join('');
 
   return `
-    <div class="bg-white rounded-2xl border border-zinc-200 shadow-sm overflow-hidden">
-      <h2 class="text-[11px] font-semibold text-zinc-400 uppercase tracking-wider px-5 pt-5 pb-2">🕐 Utolsó ${recent.length} alkalom</h2>
-      <ul class="divide-y divide-zinc-100">${items}</ul>
-    </div>
-  `;
+    <section class="fade-up" style="animation-delay:200ms">
+      <div class="flex items-end justify-between mb-3">
+        <h2 class="text-[20px] font-semibold tracking-tight text-fg-1">Havi bontás</h2>
+        <span class="eyebrow">${state.selectedYear} · ${total} alkalom</span>
+      </div>
+      <div class="card p-5" style="border-radius:24px">
+        <div class="flex items-end gap-1.5" style="min-height:${BAR+36}px">${bars}</div>
+      </div>
+    </section>`;
 }
 
-// ─────────────────────────────────────────────────────────────────────
-// Computations + handlers
-// ─────────────────────────────────────────────────────────────────────
+// ─── Recent Sessions ───
+function renderRecent(state: ProfileState): string {
+  if (state.playerSessions.length === 0) return chartEmpty('Utolsó alkalmak', 'Nincs még regisztrált alkalom.');
+  const recent = state.playerSessions.slice(0, 10);
 
+  const items = recent.map((s) => {
+    const isCurrent = s.year === state.currentYear && s.month === state.currentMonth;
+    const [,m,d] = s.date.split('-').map(Number);
+    return `
+      <li class="flex items-center gap-3 px-4 py-3 border-b last:border-b-0 hairline">
+        <div class="w-11 h-11 rounded-[12px] flex flex-col items-center justify-center flex-shrink-0"
+             style="background:${isCurrent ? 'color-mix(in oklab,var(--accent) 14%,transparent)' : 'color-mix(in oklab,var(--fg-3) 12%,transparent)'}">
+          <span class="eyebrow text-[8px]" style="${isCurrent ? 'color:var(--accent-ink)' : ''}">${MONTH_SHORT[m-1]}</span>
+          <span class="font-mono-tnum font-semibold text-[15px] leading-none mt-0.5"
+                style="${isCurrent ? 'color:var(--accent-ink)' : 'color:var(--fg-1)'}">${d}</span>
+        </div>
+        <div class="flex-1 min-w-0">
+          <p class="text-[14px] font-medium text-fg-1">${eh(formatDateHuLong(s.date))}</p>
+          <p class="text-[11px] text-fg-3 font-mono-tnum">${s.year} · ${String(m).padStart(2,'0')}. hónap</p>
+        </div>
+        <span class="text-[11px] font-semibold px-2 py-0.5 rounded-full"
+              style="background:rgba(16,185,129,0.12);color:#047857">✓ Részt vett</span>
+      </li>`;
+  }).join('');
+
+  return `
+    <section class="fade-up" style="animation-delay:240ms">
+      <div class="flex items-end justify-between mb-3">
+        <h2 class="text-[20px] font-semibold tracking-tight text-fg-1">Utolsó ${recent.length} alkalom</h2>
+        <a href="#/" class="text-[12px] font-medium" style="color:var(--accent)">Összes →</a>
+      </div>
+      <div class="card overflow-hidden" style="border-radius:24px">
+        <ol>${items}</ol>
+      </div>
+    </section>`;
+}
+
+function chartEmpty(title: string, msg: string): string {
+  return `
+    <section class="fade-up">
+      <h2 class="text-[20px] font-semibold tracking-tight text-fg-1 mb-3">${title}</h2>
+      <div class="card-soft p-5 text-center" style="border-radius:24px">
+        <p class="text-[14px] text-fg-3">${msg}</p>
+      </div>
+    </section>`;
+}
+
+// ─── Computations ───
 function recomputePlayerSessions(state: ProfileState) {
   const seen = new Set<string>();
   const sessions: ProfileSession[] = [];
   for (const r of state.allRecords) {
-    if (r.name !== state.selectedName) continue;
-    if (r.status !== 'Yes') continue;
-    if (!r.event_date) continue;
+    if (r.name !== state.selectedName || r.status !== 'Yes' || !r.event_date) continue;
     if (seen.has(r.event_date)) continue;
     seen.add(r.event_date);
     const [y, m] = r.event_date.split('-').map(Number);
     if (!Number.isFinite(y) || !Number.isFinite(m)) continue;
     sessions.push({ date: r.event_date, year: y, month: m });
   }
-  sessions.sort((a, b) => b.date.localeCompare(a.date)); // legújabb először
+  sessions.sort((a, b) => b.date.localeCompare(a.date));
   state.playerSessions = sessions;
 }
 
 function attachHandlers(container: HTMLElement, state: ProfileState) {
   const playerSel = container.querySelector<HTMLSelectElement>('#player-select')!;
-  const yearSel = container.querySelector<HTMLSelectElement>('#year-select')!;
-  const body = container.querySelector<HTMLElement>('#profile-body')!;
+  const yearSel   = container.querySelector<HTMLSelectElement>('#year-select')!;
+  const body      = container.querySelector<HTMLElement>('#profile-body')!;
 
   const refresh = () => {
     recomputePlayerSessions(state);
     body.innerHTML = renderBody(state);
-    attachHandlers(container, state); // re-bind after innerHTML swap
+    attachHandlers(container, state);
   };
 
-  playerSel.addEventListener('change', () => {
-    state.selectedName = playerSel.value;
-    refresh();
-  });
-  yearSel.addEventListener('change', () => {
-    state.selectedYear = Number(yearSel.value);
-    refresh();
-  });
+  playerSel.addEventListener('change', () => { state.selectedName = playerSel.value; refresh(); });
+  yearSel.addEventListener('change',   () => { state.selectedYear  = Number(yearSel.value); refresh(); });
 }
 
-// ─────────────────────────────────────────────────────────────────────
-// Utils
-// ─────────────────────────────────────────────────────────────────────
-
+// ─── Utils ───
 function uniqueSorted(arr: string[]): string[] {
   return [...new Set(arr.filter(Boolean))].sort((a, b) => a.localeCompare(b, 'hu'));
 }
-
-function escapeHtml(s: string): string {
-  return s
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
-    .replace(/"/g, '&quot;')
-    .replace(/'/g, '&#039;');
+function eh(s: string): string {
+  return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#039;');
 }
-
-function escapeAttr(s: string): string {
-  return escapeHtml(s);
-}
+function ea(s: string): string { return eh(s); }

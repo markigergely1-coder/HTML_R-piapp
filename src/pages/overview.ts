@@ -62,14 +62,12 @@ function renderLoadingShell(): string {
 
 function renderShell(state: OverviewState): string {
   return `
-    <div class="bg-zinc-50 min-h-screen">
-      <div class="max-w-md mx-auto">
-        ${renderHeader('overview')}
-        ${renderDateSelector(state)}
-        <main id="result-main" class="px-4 py-5">
-          ${renderResult(state)}
-        </main>
-      </div>
+    <div class="device">
+      ${renderHeader('overview')}
+      ${renderDateSelector(state)}
+      <main id="result-main" class="px-5 py-5">
+        ${renderResult(state)}
+      </main>
     </div>
   `;
 }
@@ -82,11 +80,9 @@ function renderDateSelector(state: OverviewState): string {
     .join('');
 
   return `
-    <div class="bg-white border-b border-zinc-200 px-4 pt-3 pb-3">
-      <p class="text-[10px] font-semibold text-zinc-400 uppercase tracking-wider mb-2.5">
-        Válassz alkalmat
-      </p>
-      <div id="date-scroller" class="flex gap-2 overflow-x-auto no-scrollbar -mx-4 px-4 pb-1">
+    <div class="px-5 pt-4 pb-3 border-b hairline" style="background:var(--bg-card)">
+      <p class="eyebrow mb-2.5">Válassz alkalmat</p>
+      <div id="date-scroller" class="flex gap-2 overflow-x-auto no-scrollbar -mx-5 px-5 pb-1">
         ${buttons}
       </div>
     </div>
