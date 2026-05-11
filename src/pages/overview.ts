@@ -1,8 +1,10 @@
 /**
- * Alkalmak Áttekintése oldal — Variáns A design.
- * - Sticky header
- * - Vízszintesen görgethető dátum-gombok (létszámokkal)
- * - Eredmény: kártyarács színes avatar-okkal / üres / lemondott állapot
+ * Alkalmak Áttekintése oldal — Claude Design implementáció.
+ * - Hero kártya: nagy dátum, létszám, "Jelentkezés" gomb (placeholder)
+ * - DateChip scroller (pill stílus, accent jelölés)
+ * - Résztvevők kártya-grid layout
+ * - Lemondott / üres állapot
+ * - UpcomingTeaser info strip
  */
 
 import {
@@ -13,7 +15,7 @@ import {
   formatDateHuLong,
 } from '../lib/dates';
 import { getAttendeesByDates, getCancelledSessions, type CancelledSession } from '../lib/firestore';
-import { getInitials, getAvatarColor } from '../lib/avatar';
+import { getInitials } from '../lib/avatar';
 import { renderHeader } from '../components/header';
 
 interface OverviewState {
@@ -24,11 +26,10 @@ interface OverviewState {
   cancelled: Map<string, CancelledSession>;
 }
 
+// ─── Belépési pont ───
 export async function renderOverviewPage(container: HTMLElement): Promise<void> {
-  // Kezdeti loading state
   container.innerHTML = renderLoadingShell();
 
-  // Adatok lekérése párhuzamosan
   const dates = generateTuesdayDates(8, 1);
   const [attendeesByDate, cancelled] = await Promise.all([
     getAttendeesByDates(dates),
@@ -48,218 +49,345 @@ export async function renderOverviewPage(container: HTMLElement): Promise<void> 
   attachHandlers(container, state);
 }
 
-// ─────────────────────────────────────────────────────────────────────
-// Rendering
-// ─────────────────────────────────────────────────────────────────────
-
+// ─── Loading ───
 function renderLoadingShell(): string {
   return `
-    <div class="bg-zinc-50 min-h-screen flex items-center justify-center">
-      <div class="text-zinc-400 text-sm">Betöltés…</div>
-    </div>
-  `;
+    <div class="device">
+      <div style="height:88px;background:var(--bg-glass);border-bottom:1px solid var(--line)"></div>
+      <div class="px-5 pt-5 space-y-4">
+        <div class="h-44 rounded-[28px] animate-pulse" style="background:var(--line)"></div>
+        <div class="flex gap-2">
+          ${Array(6).fill(0).map(() => `<div class="h-20 w-16 rounded-2xl animate-pulse flex-none" style="background:var(--line)"></div>`).join('')}
+        </div>
+        <div class="h-48 rounded-[22px] animate-pulse" style="background:var(--line)"></div>
+      </div>
+    </div>`;
 }
 
+// ─── Shell ───
 function renderShell(state: OverviewState): string {
   return `
     <div class="device">
       ${renderHeader('overview')}
-      ${renderDateSelector(state)}
-      <main id="result-main" class="px-5 py-5">
+      ${renderHero(state)}
+      ${renderDateScroller(state)}
+      <div id="result-main" class="px-5 pt-3">
         ${renderResult(state)}
-      </main>
-    </div>
-  `;
+      </div>
+      ${renderUpcomingTeaser()}
+    </div>`;
 }
 
-function renderDateSelector(state: OverviewState): string {
-  // Görgesés végén legyen a soron következő — a kronológikus sorrend ezt biztosítja,
-  // és JS-ben görgetünk a kiválasztotthoz mount után
-  const buttons = state.dates
-    .map((date) => renderDateButton(date, state))
-    .join('');
+// ─── Hero kártya ───
+function renderHero(state: OverviewState): string {
+  const date = state.selected;
+  const isCancelled = state.cancelled.has(date);
+  const attendees = state.attendeesByDate.get(date) ?? [];
+  const count = isCancelled ? 0 : attendees.length;
+  const idealMin = 8;
+  const isReady = count >= idealMin;
+
+  // Dátum parse
+  const [y, m, d] = date.split('-').map(Number);
+  const dayNames = ['vasárnap','hétfő','kedd','szerda','csütörtök','péntek','szombat'];
+  const monthNames = ['január','február','március','április','május','június','július','augusztus','szeptember','október','november','december'];
+  const dt = new Date(Date.UTC(y, m - 1, d));
+  const dayName = dayNames[dt.getUTCDay()];
+  const monthLong = monthNames[m - 1];
+
+  // Relatív időcímke
+  const relLabel = getRelativeLabel(date);
+
+  const relBadge = isCancelled
+    ? `<span class="text-[11px] font-semibold px-2 py-0.5 rounded-full" style="background:rgba(120,120,120,0.14);color:var(--fg-2)">Elmarad</span>`
+    : relLabel
+      ? `<span class="text-[11px] font-semibold px-2 py-0.5 rounded-full" style="background:color-mix(in oklab,var(--accent) 14%,transparent);color:var(--accent-ink)">${relLabel}</span>`
+      : '';
+
+  const countSection = isCancelled
+    ? `<div class="mt-4">
+        <p class="text-[14px] font-semibold text-fg-1">Elmarad</p>
+        <p class="text-[12px] text-fg-2 mt-0.5">${eh(state.cancelled.get(date)?.reason ?? '')}</p>
+       </div>`
+    : `<div class="mt-4 flex items-center justify-between">
+        <div class="flex items-center gap-3">
+          <div class="w-12 h-12 rounded-full flex items-center justify-center"
+               style="background:${isReady ? 'color-mix(in oklab,#10b981 16%,transparent)' : 'color-mix(in oklab,var(--accent) 14%,transparent)'};border:1px solid color-mix(in oklab,currentColor 20%,transparent);color:${isReady ? '#047857' : 'var(--accent-ink)'}">
+            <span class="font-mono-tnum font-bold text-[18px] num-display">${count}</span>
+          </div>
+          <div>
+            <p class="text-[14px] font-semibold text-fg-1">${count} fő jelentkezett</p>
+            <p class="text-[12px] text-fg-2">${isReady ? 'Lesz edzés ✓' : `Még ${idealMin - count} fő kell`}</p>
+          </div>
+        </div>
+        <button id="btn-jelentkezes"
+          class="px-3.5 py-2 rounded-full text-[12px] font-semibold text-white shadow-sm cursor-not-allowed opacity-60"
+          title="Hamarosan elérhető"
+          style="background:var(--accent)">
+          Jelentkezés
+        </button>
+       </div>`;
 
   return `
-    <div class="px-5 pt-4 pb-3 border-b hairline" style="background:var(--bg-card)">
-      <p class="eyebrow mb-2.5">Válassz alkalmat</p>
-      <div id="date-scroller" class="flex gap-2 overflow-x-auto no-scrollbar -mx-5 px-5 pb-1">
-        ${buttons}
+    <section class="relative px-5 pt-5 pb-2 fade-up">
+      <div class="halo"></div>
+      <div class="relative card noise lift overflow-hidden" style="border-radius:28px">
+        ${renderVolleyballArt()}
+        <div class="relative p-5">
+          <div class="flex items-center justify-between mb-3">
+            <span class="eyebrow">Kiválasztott alkalom</span>
+            ${relBadge}
+          </div>
+          <div class="flex items-baseline gap-3 mb-1">
+            <p class="font-mono-tnum num-display font-semibold text-[64px] leading-none text-fg-1"
+               style="${isCancelled ? 'text-decoration:line-through;text-decoration-color:var(--fg-3)' : ''}">${d}</p>
+            <div class="leading-tight">
+              <p class="text-[15px] font-semibold text-fg-1 capitalize">${monthLong}</p>
+              <p class="text-[12px] text-fg-3 capitalize">${dayName} · ${y}</p>
+            </div>
+          </div>
+          ${countSection}
+        </div>
       </div>
-    </div>
-  `;
+    </section>`;
 }
 
-function renderDateButton(date: string, state: OverviewState): string {
+// ─── Date scroller ───
+function renderDateScroller(state: OverviewState): string {
+  const chips = state.dates.map((date) => renderDateChip(date, state)).join('');
+  return `
+    <section class="px-5 pt-4 pb-1">
+      <div class="flex items-end justify-between mb-2">
+        <span class="eyebrow">Válassz alkalmat</span>
+        <span class="eyebrow text-[10px]">${state.dates.length} alkalom</span>
+      </div>
+      <div id="date-scroller" class="flex gap-2 overflow-x-auto no-scrollbar -mx-5 px-5 pb-2">
+        ${chips}
+      </div>
+    </section>`;
+}
+
+function renderDateChip(date: string, state: OverviewState): string {
   const isCancelled = state.cancelled.has(date);
   const isSelected = date === state.selected;
   const isUpcoming = date === state.upcoming;
   const count = state.attendeesByDate.get(date)?.length ?? 0;
 
-  // Class kombinációk a 4 lehetséges állapotra
-  let baseClass =
-    'date-btn flex-none flex flex-col items-center gap-0.5 px-3.5 py-2 rounded-xl border transition-colors';
+  const d = dayOf(date);
+  const monthShort = formatMonthShortHu(date);
 
-  if (isCancelled) {
-    baseClass += ' border-zinc-200 bg-zinc-50 opacity-45';
-  } else if (isSelected) {
-    baseClass += ' border-2 border-brand-600 bg-brand-50 text-brand-700 relative shadow-sm shadow-brand-100';
-  } else {
-    baseClass += ' border-zinc-200 bg-zinc-50 text-zinc-500 hover:border-zinc-300 hover:bg-zinc-100';
-  }
-
-  const upcomingDot =
-    isUpcoming && !isCancelled
-      ? `<span class="absolute -top-1 -right-1 w-2.5 h-2.5 rounded-full bg-emerald-500 border-2 border-white animate-pulse" aria-label="Következő alkalom"></span>`
-      : '';
-
-  const month = formatMonthShortHu(date);
-  const day = dayOf(date);
-
-  const countLabel = isCancelled
-    ? `<span class="text-[10px] text-zinc-400">❌</span>`
-    : `<span class="text-[9px] ${isSelected ? 'text-brand-700' : 'text-zinc-400'}">${count} fő</span>`;
-
-  const labelClass = isCancelled ? 'line-through text-zinc-400' : '';
-  const dayClass = isCancelled ? 'line-through text-zinc-300' : '';
+  const upcomingDot = isUpcoming && !isCancelled
+    ? `<span class="absolute -top-1 -right-1 w-2.5 h-2.5 rounded-full" style="background:#10b981;box-shadow:0 0 0 2px var(--bg-card)"></span>`
+    : '';
 
   return `
-    <button
-      class="${baseClass}"
+    <button class="date-btn relative flex-none flex flex-col items-center px-3.5 py-2.5 rounded-2xl border transition-colors"
       data-date="${date}"
+      style="
+        background:${isCancelled ? 'color-mix(in oklab,var(--fg-3) 8%,transparent)' : isSelected ? 'color-mix(in oklab,var(--accent) 14%,transparent)' : 'var(--bg-card)'};
+        border-color:${isSelected ? 'var(--accent)' : 'var(--line)'};
+        min-width:60px;
+        opacity:${isCancelled ? '0.55' : '1'};
+      "
       ${isCancelled ? 'aria-disabled="true"' : ''}
     >
       ${upcomingDot}
-      <span class="text-[9px] font-semibold uppercase tracking-wider ${labelClass}">${month}</span>
-      <span class="text-[19px] font-semibold leading-tight ${dayClass}">${day}</span>
-      ${countLabel}
-    </button>
-  `;
+      <span class="text-[9px] font-semibold uppercase tracking-widest"
+            style="color:${isSelected ? 'var(--accent-ink)' : 'var(--fg-3)'};${isCancelled ? 'text-decoration:line-through' : ''}">
+        ${monthShort}
+      </span>
+      <span class="font-mono-tnum font-semibold text-[20px] leading-tight mt-0.5"
+            style="color:${isSelected ? 'var(--accent-ink)' : 'var(--fg-1)'};${isCancelled ? 'text-decoration:line-through' : ''}">
+        ${d}
+      </span>
+      <span class="text-[10px] mt-0.5 font-mono-tnum"
+            style="color:${isSelected ? 'var(--accent-ink)' : 'var(--fg-3)'}">
+        ${isCancelled ? '—' : `${count} fő`}
+      </span>
+    </button>`;
 }
 
+// ─── Result (state-függő) ───
 function renderResult(state: OverviewState): string {
   if (state.cancelled.has(state.selected)) {
-    return renderCancelledState(state.selected, state.cancelled.get(state.selected));
+    return renderCancelledCard(state.selected, state.cancelled.get(state.selected));
   }
   const attendees = state.attendeesByDate.get(state.selected) ?? [];
-  if (attendees.length === 0) {
-    return renderEmptyState(state.selected);
-  }
-  return renderAttendeesState(state.selected, attendees);
+  if (attendees.length === 0) return renderEmptyCard(state.selected);
+  return renderAttendeesSection(attendees);
 }
 
-function renderAttendeesState(date: string, attendees: string[]): string {
-  const count = attendees.length;
-  const cards = attendees.map(renderAttendeeCard).join('');
+function renderAttendeesSection(attendees: string[]): string {
+  const cards = attendees.map((name) => {
+    const hue = avatarHue(name);
+    const initials = getInitials(name);
+    return `
+      <div class="card flex items-center gap-2.5 px-3 py-2.5 lift" style="border-radius:16px">
+        <div class="rounded-full flex items-center justify-center flex-shrink-0 font-semibold text-[10px]"
+             style="width:28px;height:28px;background:linear-gradient(135deg,hsl(${hue} 80% 88%) 0%,hsl(${(hue+30)%360} 75% 78%) 100%);color:hsl(${hue} 60% 30%)">
+          ${eh(initials)}
+        </div>
+        <span class="text-[12.5px] font-medium text-fg-1 truncate">${eh(name)}</span>
+      </div>`;
+  }).join('');
+
   return `
-    <div class="flex items-center gap-3 mb-5">
-      <div class="w-14 h-14 rounded-full border-2 border-brand-600 bg-brand-50 flex items-center justify-center flex-shrink-0">
-        <span class="text-2xl font-bold text-brand-700">${count}</span>
+    <div class="fade-up" style="animation-delay:80ms">
+      <div class="flex items-end justify-between mb-3">
+        <h2 class="text-[20px] font-semibold tracking-tight text-fg-1">Résztvevők</h2>
+        <span class="eyebrow">${attendees.length} fő</span>
       </div>
-      <div>
-        <p class="text-[17px] font-semibold text-zinc-900 leading-snug">
-          ${count} fő jelentkezett
+      <div class="grid grid-cols-2 sm:grid-cols-3 gap-2">
+        ${cards}
+      </div>
+    </div>`;
+}
+
+function renderEmptyCard(date: string): string {
+  return `
+    <div class="fade-up">
+      <div class="card-soft p-8 text-center" style="border-radius:22px">
+        <div class="w-12 h-12 rounded-full mx-auto flex items-center justify-center mb-3"
+             style="background:color-mix(in oklab,var(--fg-3) 14%,transparent)">
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" class="text-fg-2">
+            <circle cx="12" cy="12" r="9"/><path d="M3 12c4.5-1.5 13.5-1.5 18 0M12 3c-2.5 4.5-2.5 13.5 0 18M12 3c2.5 4.5 2.5 13.5 0 18"/>
+          </svg>
+        </div>
+        <p class="text-[15px] font-semibold text-fg-1">Még nincs jelentkező</p>
+        <p class="text-[12px] text-fg-2 mt-1 max-w-[280px] mx-auto">
+          Légy az első, aki jelzi a részvételét erre az alkalomra!
         </p>
-        <p class="text-[13px] text-zinc-500">${formatDateHuLong(date)}</p>
+        <p class="text-[12px] text-fg-3 mt-0.5">${eh(formatDateHuLong(date))}</p>
+        <button id="btn-jelentkezes-empty"
+          class="mt-4 px-4 py-2 rounded-full text-[13px] font-semibold text-white cursor-not-allowed opacity-60"
+          title="Hamarosan elérhető"
+          style="background:var(--accent)">
+          Jelentkezem
+        </button>
       </div>
-    </div>
-    <div class="grid grid-cols-2 sm:grid-cols-3 gap-2">
-      ${cards}
-    </div>
-  `;
+    </div>`;
 }
 
-function renderAttendeeCard(name: string): string {
-  const initials = getInitials(name);
-  const { bg, text } = getAvatarColor(name);
+function renderCancelledCard(date: string, info?: CancelledSession): string {
   return `
-    <div class="flex items-center gap-2 px-2.5 py-2 bg-white rounded-xl border border-zinc-200 shadow-sm">
-      <div class="w-7 h-7 rounded-full ${bg} flex items-center justify-center flex-shrink-0">
-        <span class="text-[10px] font-semibold ${text}">${escapeHtml(initials)}</span>
+    <div class="fade-up">
+      <div class="card-soft p-6 text-center relative overflow-hidden" style="border-radius:22px">
+        <div class="absolute inset-0 opacity-50"
+             style="background:radial-gradient(80% 60% at 50% 0%,rgba(120,120,120,0.10),transparent 70%)"></div>
+        <div class="relative">
+          <div class="w-12 h-12 rounded-full mx-auto flex items-center justify-center mb-3"
+               style="background:color-mix(in oklab,var(--fg-3) 18%,transparent)">
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" class="text-fg-2">
+              <circle cx="12" cy="12" r="9"/><path d="m8 8 8 8M16 8l-8 8"/>
+            </svg>
+          </div>
+          <p class="text-[15px] font-semibold text-fg-1">Ez az alkalom elmarad</p>
+          <p class="text-[12px] text-fg-2 mt-0.5">${eh(formatDateHuLong(date))}</p>
+          ${info?.reason ? `<p class="text-[12px] text-fg-3 mt-1">${eh(info.reason)}</p>` : ''}
+        </div>
       </div>
-      <span class="text-[12px] font-medium text-zinc-800 truncate">${escapeHtml(name)}</span>
-    </div>
-  `;
+    </div>`;
 }
 
-function renderEmptyState(date: string): string {
+// ─── Upcoming teaser strip ───
+function renderUpcomingTeaser(): string {
   return `
-    <div class="flex flex-col items-center justify-center py-16 text-center gap-3">
-      <div class="w-16 h-16 rounded-2xl bg-zinc-100 flex items-center justify-center">
-        <svg xmlns="http://www.w3.org/2000/svg" class="w-8 h-8 text-zinc-400" fill="none"
-             viewBox="0 0 24 24" stroke="currentColor" stroke-width="1.5">
-          <path stroke-linecap="round" stroke-linejoin="round"
-                d="M12 6v6h4.5m4.5 0a9 9 0 11-18 0 9 9 0 0118 0z" />
-        </svg>
+    <section class="px-5 pt-5 pb-10">
+      <div class="card-soft px-4 py-3 flex items-center gap-3" style="border-radius:18px">
+        <div class="w-8 h-8 rounded-full flex items-center justify-center"
+             style="background:color-mix(in oklab,var(--accent) 14%,transparent)">
+          <span class="text-[13px]">📅</span>
+        </div>
+        <div class="flex-1 min-w-0">
+          <p class="text-[12.5px] font-medium text-fg-1">Heti emlékeztető</p>
+          <p class="text-[11px] text-fg-3">Minden kedden, 19:00 — Sportcsarnok B terem</p>
+        </div>
+        <button id="btn-reszletek"
+          class="text-[12px] font-semibold cursor-not-allowed opacity-60"
+          title="Hamarosan elérhető"
+          style="color:var(--accent)">
+          Részletek →
+        </button>
       </div>
-      <div>
-        <p class="text-[16px] font-semibold text-zinc-700 mb-1">Még nincs jelentkező</p>
-        <p class="text-[13px] text-zinc-400">${formatDateHuLong(date)}</p>
-        <p class="text-[13px] text-zinc-400 mt-0.5">Légy az első, aki jelzi részvételét!</p>
-      </div>
-    </div>
-  `;
+    </section>`;
 }
 
-function renderCancelledState(date: string, cancelled?: CancelledSession): string {
-  const reason = cancelled?.reason?.trim();
+// ─── Volleyball art SVG ───
+function renderVolleyballArt(): string {
   return `
-    <div class="bg-red-50 border border-red-200 rounded-2xl p-5 flex flex-col items-center text-center gap-3">
-      <div class="w-14 h-14 rounded-full bg-red-100 flex items-center justify-center">
-        <svg xmlns="http://www.w3.org/2000/svg" class="w-7 h-7 text-red-500" fill="none"
-             viewBox="0 0 24 24" stroke="currentColor" stroke-width="1.5">
-          <path stroke-linecap="round" stroke-linejoin="round"
-                d="M6.75 3v2.25M17.25 3v2.25M3 18.75V7.5a2.25 2.25 0 012.25-2.25h13.5A2.25 2.25 0 0121 7.5v11.25m-18 0A2.25 2.25 0 005.25 21h13.5A2.25 2.25 0 0021 18.75m-18 0v-7.5A2.25 2.25 0 015.25 9h13.5A2.25 2.25 0 0121 11.25v7.5m-9-6h.008v.008H12v-.008z" />
-        </svg>
-      </div>
-      <div>
-        <p class="text-[16px] font-semibold text-red-800 mb-1">Ez az alkalom elmarad</p>
-        <p class="text-[13px] text-red-600">${formatDateHuLong(date)}</p>
-        ${reason ? `<p class="text-[13px] text-red-500 mt-0.5">${escapeHtml(reason)}</p>` : ''}
-      </div>
-    </div>
-  `;
+    <div class="absolute inset-0 overflow-hidden pointer-events-none" style="opacity:0.07">
+      <svg viewBox="0 0 200 200" fill="none" stroke="currentColor" stroke-width="1.2"
+           style="position:absolute;right:-20px;top:-20px;width:180px;height:180px;color:var(--fg-1)">
+        <circle cx="100" cy="100" r="92"/>
+        <path d="M8 100 Q60 60 100 100 T192 100"/>
+        <path d="M100 8 Q60 60 100 100 T100 192"/>
+        <path d="M100 8 Q140 60 100 100 T100 192"/>
+        <path d="M8 100 Q60 140 100 100 T192 100"/>
+        <circle cx="100" cy="100" r="74" opacity="0.4"/>
+      </svg>
+    </div>`;
 }
 
-// ─────────────────────────────────────────────────────────────────────
-// Event handling
-// ─────────────────────────────────────────────────────────────────────
-
+// ─── Event handling ───
 function attachHandlers(container: HTMLElement, state: OverviewState) {
   const scroller = container.querySelector<HTMLDivElement>('#date-scroller')!;
 
-  // Görgesés a kiválasztott gombhoz (látható legyen mount után)
+  // Scroll a kiválasztott chiphez
   requestAnimationFrame(() => {
-    const selectedBtn = scroller.querySelector<HTMLButtonElement>(
-      `[data-date="${state.selected}"]`,
-    );
-    selectedBtn?.scrollIntoView({ behavior: 'instant', block: 'nearest', inline: 'center' });
+    scroller.querySelector<HTMLButtonElement>(`[data-date="${state.selected}"]`)
+      ?.scrollIntoView({ behavior: 'instant', block: 'nearest', inline: 'center' });
   });
 
-  // Dátum-gomb kattintás (event delegation)
+  // Dátum chip kattintás
   scroller.addEventListener('click', (e) => {
     const target = (e.target as HTMLElement).closest<HTMLButtonElement>('.date-btn');
-    if (!target) return;
+    if (!target || target.getAttribute('aria-disabled') === 'true') return;
     const date = target.dataset.date;
     if (!date || date === state.selected) return;
     state.selected = date;
-    // Csak az érintett gombokat + a result szekciót frissítjük (DOM swap)
-    scroller.innerHTML = state.dates
-      .map((d) => renderDateButton(d, state))
-      .join('');
+
+    // Hero frissítés
+    const heroSection = container.querySelector<HTMLElement>('section.fade-up');
+    if (heroSection) heroSection.outerHTML = renderHero(state);
+
+    // Chip-ek frissítés
+    scroller.innerHTML = state.dates.map((d) => renderDateChip(d, state)).join('');
+
+    // Result frissítés
     const resultEl = container.querySelector<HTMLElement>('#result-main')!;
     resultEl.innerHTML = renderResult(state);
+
+    // Re-scroll
+    requestAnimationFrame(() => {
+      scroller.querySelector<HTMLButtonElement>(`[data-date="${state.selected}"]`)
+        ?.scrollIntoView({ behavior: 'smooth', block: 'nearest', inline: 'center' });
+    });
   });
 }
 
-// ─────────────────────────────────────────────────────────────────────
-// Utils
-// ─────────────────────────────────────────────────────────────────────
+// ─── Utils ───
+function getRelativeLabel(iso: string): string | null {
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+  const [y, m, d] = iso.split('-').map(Number);
+  const target = new Date(Date.UTC(y, m - 1, d));
+  const diff = Math.round((target.getTime() - today.getTime()) / 86400000);
+  if (diff === 0)  return 'Ma';
+  if (diff === 1)  return 'Holnap';
+  if (diff === -1) return 'Tegnap';
+  if (diff > 1 && diff < 7)   return `${diff} nap múlva`;
+  if (diff < -1 && diff > -7) return `${-diff} napja`;
+  return null;
+}
 
-function escapeHtml(s: string): string {
+function avatarHue(name: string): number {
+  let h = 0;
+  for (const c of name) h = (h * 31 + c.charCodeAt(0)) & 0xffffffff;
+  return Math.abs(h) % 360;
+}
+
+function eh(s: string): string {
   return s
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
-    .replace(/"/g, '&quot;')
-    .replace(/'/g, '&#039;');
+    .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;').replace(/'/g, '&#039;');
 }
