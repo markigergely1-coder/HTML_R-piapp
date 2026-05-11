@@ -5,6 +5,7 @@
 
 import { renderOverviewPage } from './pages/overview';
 import { renderProfilePage } from './pages/profile';
+import { renderQrPage } from './pages/qr';
 
 type Route = {
   pattern: RegExp;
@@ -14,6 +15,7 @@ type Route = {
 const ROUTES: Route[] = [
   { pattern: /^#?\/?$/, render: renderOverviewPage },
   { pattern: /^#?\/profile\/?$/, render: renderProfilePage },
+  { pattern: /^#?\/qr\/?$/, render: renderQrPage },
 ];
 
 function currentHash(): string {

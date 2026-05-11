@@ -303,7 +303,7 @@ function renderYearlyChart(state: ProfileState): string {
       const count = byYear.get(y) ?? 0;
       const h = max > 0 ? Math.max(4, Math.round((count / max) * BAR_AREA)) : 4;
       const isSelected = y === state.selectedYear;
-      const barColor = isSelected ? 'bg-brand-500' : 'bg-brand-300';
+      const barColor = isSelected ? 'bg-brand-500' : 'bg-sky-400';
       return `
         <div class="flex flex-col items-center gap-1.5 flex-1 min-w-0">
           <span class="text-[11px] font-bold ${isSelected ? 'text-brand-700' : 'text-zinc-600'}">${count}</span>

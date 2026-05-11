@@ -2,11 +2,12 @@
  * Osztott Header komponens — sticky brand + tab navigáció.
  */
 
-export type PageKey = 'overview' | 'profile';
+export type PageKey = 'overview' | 'profile' | 'qr';
 
 const TABS: { key: PageKey; label: string; href: string }[] = [
   { key: 'overview', label: 'Alkalmak', href: '#/' },
   { key: 'profile', label: 'Profil', href: '#/profile' },
+  { key: 'qr', label: 'QR', href: '#/qr' },
 ];
 
 export function renderHeader(currentPage: PageKey): string {
@@ -31,7 +32,7 @@ export function renderHeader(currentPage: PageKey): string {
             <span class="text-[15px] font-semibold text-zinc-900">Röpi</span>
           </div>
           <span class="text-[10px] font-semibold text-zinc-400 uppercase tracking-widest">
-            ${currentPage === 'profile' ? 'Profil' : 'Alkalmak'}
+            ${currentPage === 'profile' ? 'Profil' : currentPage === 'qr' ? 'Check-in' : 'Alkalmak'}
           </span>
         </div>
       </header>
