@@ -81,6 +81,33 @@ export async function getAttendeesByDates(
   return result;
 }
 
+export interface RawAttendance {
+  name: string;
+  status: string;
+  event_date: string;
+  mode: string;
+}
+
+/** Az ÖSSZES attendance record (csak a profil oldalhoz; teszt mód kihagyva). */
+export async function getAllAttendanceRecords(): Promise<RawAttendance[]> {
+  const snap = await getDocs(collection(db, COLLECTIONS.ATTENDANCE));
+  const records: RawAttendance[] = [];
+  snap.forEach((doc) => {
+    const d = doc.data();
+    const mode = (d.mode ?? 'valós').toString().toLowerCase();
+    if (mode === 'teszt') return;
+    const name = (d.name ?? '').toString().trim();
+    if (!name) return;
+    records.push({
+      name,
+      status: (d.status ?? '').toString().trim(),
+      event_date: d.event_date ?? '',
+      mode,
+    });
+  });
+  return records;
+}
+
 /** Lemondott alkalmak: dátum → opcionális indoklás. */
 export async function getCancelledSessions(): Promise<Map<string, CancelledSession>> {
   const snap = await getDocs(collection(db, COLLECTIONS.CANCELLED));

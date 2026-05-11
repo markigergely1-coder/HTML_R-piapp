@@ -14,6 +14,7 @@ import {
 } from '../lib/dates';
 import { getAttendeesByDates, getCancelledSessions, type CancelledSession } from '../lib/firestore';
 import { getInitials, getAvatarColor } from '../lib/avatar';
+import { renderHeader } from '../components/header';
 
 interface OverviewState {
   dates: string[];
@@ -63,29 +64,13 @@ function renderShell(state: OverviewState): string {
   return `
     <div class="bg-zinc-50 min-h-screen">
       <div class="max-w-md mx-auto">
-        ${renderHeader()}
+        ${renderHeader('overview')}
         ${renderDateSelector(state)}
         <main id="result-main" class="px-4 py-5">
           ${renderResult(state)}
         </main>
       </div>
     </div>
-  `;
-}
-
-function renderHeader(): string {
-  return `
-    <header class="bg-white border-b border-zinc-200 sticky top-0 z-20">
-      <div class="px-4 py-3 flex items-center justify-between">
-        <div class="flex items-center gap-2">
-          <span class="text-xl" aria-hidden="true">🏐</span>
-          <span class="text-[15px] font-semibold text-zinc-900">Röpi</span>
-        </div>
-        <span class="text-[10px] font-semibold text-zinc-400 uppercase tracking-widest">
-          Alkalmak
-        </span>
-      </div>
-    </header>
   `;
 }
 
