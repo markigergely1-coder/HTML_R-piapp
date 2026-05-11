@@ -62,7 +62,7 @@ export function upcomingTuesday(dates: string[]): string {
   return dates[dates.length - 1];
 }
 
-/** Magyar formátum: "2026. máj. 11. (kedd)" */
+/** Magyar formátum: "2026. máj. 11." */
 export function formatDateHu(dateStr: string): string {
   const d = new Date(dateStr + 'T12:00:00Z');
   return new Intl.DateTimeFormat('hu-HU', {
@@ -71,4 +71,31 @@ export function formatDateHu(dateStr: string): string {
     month: 'short',
     day: 'numeric',
   }).format(d);
+}
+
+/** Magyar formátum hosszú nappal: "2026. május 11., kedd" */
+export function formatDateHuLong(dateStr: string): string {
+  const d = new Date(dateStr + 'T12:00:00Z');
+  return new Intl.DateTimeFormat('hu-HU', {
+    timeZone: HUNGARY_TZ,
+    year: 'numeric',
+    month: 'long',
+    day: 'numeric',
+    weekday: 'long',
+  }).format(d);
+}
+
+/** Magyar rövid hónap pont nélkül: "máj", "jún", "nov" */
+export function formatMonthShortHu(dateStr: string): string {
+  const d = new Date(dateStr + 'T12:00:00Z');
+  const m = new Intl.DateTimeFormat('hu-HU', {
+    timeZone: HUNGARY_TZ,
+    month: 'short',
+  }).format(d);
+  return m.replace('.', '');
+}
+
+/** Nap a hónapban szám alapján (1-31) */
+export function dayOf(dateStr: string): number {
+  return new Date(dateStr + 'T12:00:00Z').getUTCDate();
 }

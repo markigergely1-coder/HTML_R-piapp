@@ -17,3 +17,7 @@ html, body {
   background: #fafafa;
   color: #18181b;
 }
+
+/* Horizontal scroll scrollbar elrejtése (dátum-gombok) */
+.no-scrollbar::-webkit-scrollbar { display: none; }
+.no-scrollbar { -ms-overflow-style: none; scrollbar-width: none; }

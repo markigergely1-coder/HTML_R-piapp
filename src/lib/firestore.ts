@@ -21,58 +21,75 @@ export interface AttendanceRecord {
   name: string;
   status: 'Yes' | 'No' | string;
   event_date: string;
-  mode: string; // "valós" | "teszt" | ...
+  mode: string;
   timestamp?: unknown;
 }
 
-/** Egy alkalom regisztrációi (kivéve "teszt" mód). */
-export async function getAttendanceForDate(eventDate: string): Promise<AttendanceRecord[]> {
+export interface CancelledSession {
+  date: string;
+  reason?: string;
+}
+
+/**
+ * Egyszerre lekérdezi az összes megadott alkalom regisztrációit, és csoportosítja:
+ * - "teszt" mód kihagyva
+ * - megerősített résztvevő: aki "Yes"-t adott ÉS nem adott "No"-t
+ * - eredmény: Map(eventDate → sortolt nevek)
+ *
+ * Firestore `in` lekérdezés legfeljebb 30 értéket támogat — 9 keddi dátumnál ez bőven elég.
+ */
+export async function getAttendeesByDates(
+  dates: string[],
+): Promise<Map<string, string[]>> {
+  const result = new Map<string, string[]>();
+  if (dates.length === 0) return result;
+
   const q = query(
     collection(db, COLLECTIONS.ATTENDANCE),
-    where('event_date', '==', eventDate),
+    where('event_date', 'in', dates),
   );
   const snap = await getDocs(q);
-  const records: AttendanceRecord[] = [];
+
+  // Csoportosítás dátum szerint, Yes/No halmazokkal
+  const yesByDate = new Map<string, Set<string>>();
+  const noByDate = new Map<string, Set<string>>();
+  for (const date of dates) {
+    yesByDate.set(date, new Set());
+    noByDate.set(date, new Set());
+  }
+
   snap.forEach((doc) => {
     const d = doc.data();
     const mode = (d.mode ?? 'valós').toString().toLowerCase();
     if (mode === 'teszt') return;
-    records.push({
-      id: doc.id,
-      name: (d.name ?? '').toString().trim(),
-      status: (d.status ?? '').toString().trim(),
-      event_date: d.event_date,
-      mode: d.mode ?? 'valós',
-      timestamp: d.timestamp,
-    });
+    const name = (d.name ?? '').toString().trim();
+    if (!name) return;
+    const status = (d.status ?? '').toString().trim();
+    const eventDate = d.event_date;
+    if (status === 'Yes') yesByDate.get(eventDate)?.add(name);
+    else if (status === 'No') noByDate.get(eventDate)?.add(name);
   });
-  return records;
-}
 
-/**
- * Adott alkalom megerősített résztvevői:
- * - aki adott "Yes"-t ÉS nem adott "No"-t (az utolsó válasz nem számít, ezzel egyezik a Python verzió)
- * - kivéve "teszt" mód
- */
-export async function getConfirmedAttendees(eventDate: string): Promise<string[]> {
-  const records = await getAttendanceForDate(eventDate);
-  const yesSet = new Set<string>();
-  const noSet = new Set<string>();
-  for (const r of records) {
-    if (!r.name) continue;
-    if (r.status === 'Yes') yesSet.add(r.name);
-    else if (r.status === 'No') noSet.add(r.name);
+  for (const date of dates) {
+    const yes = yesByDate.get(date)!;
+    const no = noByDate.get(date)!;
+    const confirmed = [...yes]
+      .filter((n) => !no.has(n))
+      .sort((a, b) => a.localeCompare(b, 'hu'));
+    result.set(date, confirmed);
   }
-  return [...yesSet].filter((n) => !noSet.has(n)).sort((a, b) => a.localeCompare(b, 'hu'));
+  return result;
 }
 
-/** Lemondott alkalmak dátumai (YYYY-MM-DD set). */
-export async function getCancelledSessions(): Promise<Set<string>> {
+/** Lemondott alkalmak: dátum → opcionális indoklás. */
+export async function getCancelledSessions(): Promise<Map<string, CancelledSession>> {
   const snap = await getDocs(collection(db, COLLECTIONS.CANCELLED));
-  const set = new Set<string>();
+  const map = new Map<string, CancelledSession>();
   snap.forEach((doc) => {
-    const date = doc.data().date;
-    if (date) set.add(date);
+    const data = doc.data();
+    if (data.date) {
+      map.set(data.date, { date: data.date, reason: data.reason });
+    }
   });
-  return set;
+  return map;
 }
