@@ -14,7 +14,7 @@ import { renderOverviewPage } from './pages/overview';
 import { renderProfilePage } from './pages/profile';
 import { renderQrPage } from './pages/qr';
 import { renderMembersPage } from './pages/members';
-import { onAuthChange } from './lib/auth';
+import { onAuthChange, signIn, signOut } from './lib/auth';
 
 type Route = {
   pattern: RegExp;
@@ -66,6 +66,18 @@ async function dispatch(container: HTMLElement) {
 
 export function startRouter(container: HTMLElement) {
   window.addEventListener('hashchange', () => dispatch(container));
+
+  // Globális event delegation a header auth-gombokra.
+  // A container stabil — csak az innerHTML cserélődik a renderek között,
+  // így ez a listener egyszer ráül és minden re-render után működik.
+  container.addEventListener('click', (e) => {
+    const target = e.target as HTMLElement;
+    if (target.closest('#header-signin')) {
+      signIn().catch((err) => console.warn('Sign-in failed:', err));
+    } else if (target.closest('#header-signout')) {
+      signOut().catch((err) => console.warn('Sign-out failed:', err));
+    }
+  });
 
   // Az első auth state változás után, illetve minden további
   // bejelentkezésnél/kijelentkezésnél újra dispatch-elünk.
