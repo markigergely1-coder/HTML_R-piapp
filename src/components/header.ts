@@ -30,12 +30,12 @@ interface TabDef {
 
 const TABS: TabDef[] = [
   // Publikus
+  { key: 'admin',       label: 'Regisztráció', href: '#/admin' },
   { key: 'overview',    label: 'Alkalmak',    href: '#/' },
   { key: 'profile',     label: 'Profil',      href: '#/profile' },
   { key: 'database',    label: 'Adatbázis',   href: '#/database' },
   { key: 'qr',          label: 'QR',          href: '#/qr' },
   // Admin
-  { key: 'admin',       label: 'Regisztráció', href: '#/admin',       adminOnly: true },
   { key: 'members',     label: 'Tagok',       href: '#/members',     adminOnly: true },
   { key: 'accounting',  label: 'Elszámolás',  href: '#/accounting',  adminOnly: true },
   { key: 'payments',    label: 'Befizetések', href: '#/payments',    adminOnly: true },

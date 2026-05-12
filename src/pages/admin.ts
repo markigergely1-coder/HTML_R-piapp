@@ -7,7 +7,6 @@
  */
 
 import { renderHeader } from '../components/header';
-import { getAuthState, onAuthChange, signIn } from '../lib/auth';
 import { MAIN_NAME_LIST, GUEST_COUNT_OPTIONS } from '../lib/config';
 import {
   generateTuesdayDates,
@@ -47,11 +46,6 @@ let toastTimer: number | null = null;
 export async function renderAdminPage(container: HTMLElement): Promise<void> {
   container.innerHTML = renderShell(renderLoadingBody());
 
-  const auth = getAuthState();
-  if (auth.loading) return;
-  if (!auth.user)        return showSignInGate(container);
-  if (!auth.isAdmin)     return showNoPermissionGate(container, auth.user.email ?? '');
-
   const dates = generateTuesdayDates(8, 2);
   const upcoming = upcomingTuesday(dates);
   const historicalAll = await getAllAttendanceRecords();
@@ -72,10 +66,6 @@ export async function renderAdminPage(container: HTMLElement): Promise<void> {
   };
 
   rerender(container, state);
-
-  const unsub = onAuthChange((s) => {
-    if (!s.user || !s.isAdmin) { unsub(); renderAdminPage(container); }
-  });
 }
 
 // ─────────────────────────────────────────────────────────────────
@@ -97,47 +87,6 @@ function renderLoadingBody(): string {
       <div class="h-14 rounded-2xl animate-pulse" style="background:var(--line)"></div>
       ${Array(8).fill(0).map(() => `<div class="h-14 rounded-2xl animate-pulse" style="background:var(--line)"></div>`).join('')}
     </div>`;
-}
-
-function showSignInGate(container: HTMLElement): void {
-  container.innerHTML = renderShell(`
-    <div class="px-5 pt-5 pb-12 fade-up">
-      <div class="card relative p-6 text-center overflow-hidden" style="border-radius:24px">
-        <div class="halo"></div>
-        <div class="relative">
-          <div class="w-16 h-16 mx-auto rounded-2xl flex items-center justify-center mb-4"
-               style="background:color-mix(in oklab,var(--accent) 14%,transparent)">
-            <span class="text-3xl">🔒</span>
-          </div>
-          <p class="text-[17px] font-semibold text-fg-1 mb-1">Csak admin oldal</p>
-          <p class="text-[13px] text-fg-3 max-w-[280px] mx-auto mb-5">
-            A regisztrációhoz jelentkezz be az admin Google fiókoddal.
-          </p>
-          <button id="gate-signin"
-            class="inline-flex items-center gap-2 px-5 py-2.5 rounded-full text-white text-[13px] font-semibold shadow-sm"
-            style="background:var(--accent)">
-            Bejelentkezés
-          </button>
-        </div>
-      </div>
-    </div>`);
-  container.querySelector<HTMLButtonElement>('#gate-signin')?.addEventListener('click', () => {
-    signIn().catch((e) => console.warn(e));
-  });
-}
-
-function showNoPermissionGate(container: HTMLElement, email: string): void {
-  container.innerHTML = renderShell(`
-    <div class="px-5 pt-5 pb-12 fade-up">
-      <div class="card-soft p-6 text-center" style="border-radius:24px">
-        <div class="w-16 h-16 mx-auto rounded-2xl flex items-center justify-center mb-4"
-             style="background:color-mix(in oklab,#f59e0b 14%,transparent)">
-          <span class="text-3xl">⛔</span>
-        </div>
-        <p class="text-[17px] font-semibold text-fg-1 mb-1">Nincs admin jogosultság</p>
-        <p class="text-[13px] text-fg-3">${eh(email)}</p>
-      </div>
-    </div>`);
 }
 
 // ─────────────────────────────────────────────────────────────────
