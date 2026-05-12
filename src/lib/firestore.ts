@@ -13,6 +13,10 @@ import {
   deleteDoc,
   doc,
   orderBy,
+  limit,
+  serverTimestamp,
+  writeBatch,
+  setDoc,
 } from 'firebase/firestore';
 import { db } from './firebase';
 
@@ -180,4 +184,187 @@ export async function getCancelledSessions(): Promise<Map<string, CancelledSessi
     }
   });
   return map;
+}
+
+export interface CancelledSessionWithId extends CancelledSession {
+  id: string;
+}
+
+/** Lemondott alkalmak ID-vel együtt (admin CRUD-hoz). */
+export async function getCancelledSessionsWithIds(): Promise<CancelledSessionWithId[]> {
+  const snap = await getDocs(collection(db, COLLECTIONS.CANCELLED));
+  const list: CancelledSessionWithId[] = [];
+  snap.forEach((d) => {
+    const data = d.data();
+    if (data.date) list.push({ id: d.id, date: data.date, reason: data.reason });
+  });
+  return list.sort((a, b) => b.date.localeCompare(a.date)); // legújabb előre
+}
+
+export async function addCancelledSession(date: string, reason?: string): Promise<string> {
+  const payload: Record<string, unknown> = { date };
+  if (reason && reason.trim()) payload.reason = reason.trim();
+  const ref = await addDoc(collection(db, COLLECTIONS.CANCELLED), payload);
+  return ref.id;
+}
+
+export async function deleteCancelledSession(id: string): Promise<void> {
+  await deleteDoc(doc(db, COLLECTIONS.CANCELLED, id));
+}
+
+// ─────────────────────────────────────────────────────────────────
+// Attendance records — admin írás (registration)
+// ─────────────────────────────────────────────────────────────────
+
+/** Egy regisztráció (1 név, 1 alkalom). */
+export interface NewAttendanceRow {
+  name: string;
+  status: 'Yes' | 'No';
+  event_date: string;
+  mode: 'valós' | 'teszt';
+}
+
+/** Batch írás: több regisztráció egyszerre. */
+export async function addAttendanceBatch(rows: NewAttendanceRow[]): Promise<number> {
+  if (rows.length === 0) return 0;
+  const batch = writeBatch(db);
+  let count = 0;
+  for (const r of rows) {
+    const ref = doc(collection(db, COLLECTIONS.ATTENDANCE));
+    batch.set(ref, {
+      name: r.name,
+      status: r.status,
+      event_date: r.event_date,
+      mode: r.mode,
+      timestamp: serverTimestamp(),
+    });
+    count++;
+  }
+  await batch.commit();
+  return count;
+}
+
+// ─────────────────────────────────────────────────────────────────
+// Invoices (számlák)
+// ─────────────────────────────────────────────────────────────────
+
+export interface Invoice {
+  id: string;
+  inv_date: string;       // "YYYY-MM-DD"
+  target_year: number;
+  target_month: number;
+  amount: number;
+  filename?: string;
+}
+
+export async function getAllInvoices(): Promise<Invoice[]> {
+  const snap = await getDocs(collection(db, COLLECTIONS.INVOICES));
+  const list: Invoice[] = [];
+  snap.forEach((d) => {
+    const data = d.data();
+    list.push({
+      id: d.id,
+      inv_date: (data.inv_date ?? '').toString(),
+      target_year: Number(data.target_year ?? 0),
+      target_month: Number(data.target_month ?? 0),
+      amount: Number(data.amount ?? 0),
+      filename: data.filename,
+    });
+  });
+  // legújabb előre (év, hónap)
+  return list.sort((a, b) => (b.target_year - a.target_year) || (b.target_month - a.target_month));
+}
+
+// ─────────────────────────────────────────────────────────────────
+// Settlements (elszámolások)
+// ─────────────────────────────────────────────────────────────────
+
+export interface Settlement {
+  id: string;
+  year: number;
+  month: number;
+  month_name?: string;
+  saved_at?: string;
+}
+
+export async function getAllSettlements(): Promise<Settlement[]> {
+  const snap = await getDocs(collection(db, COLLECTIONS.SETTLEMENTS));
+  const list: Settlement[] = [];
+  snap.forEach((d) => {
+    const data = d.data();
+    list.push({
+      id: d.id,
+      year: Number(data.year ?? 0),
+      month: Number(data.month ?? 0),
+      month_name: data.month_name,
+      saved_at: data.saved_at,
+    });
+  });
+  return list.sort((a, b) => (b.year - a.year) || (b.month - a.month));
+}
+
+// ─────────────────────────────────────────────────────────────────
+// App logs (diagnosztika)
+// ─────────────────────────────────────────────────────────────────
+
+export interface AppLog {
+  id: string;
+  level: string; // INFO / WARNING / ERROR
+  message: string;
+  user_name?: string;
+  ip_address?: string;
+  created_at_local?: string;
+  details?: Record<string, unknown> | string;
+}
+
+export async function getAppLogs(maxItems = 200): Promise<AppLog[]> {
+  // A 'timestamp' field szerint csökkenő — Firestore order_by-jal
+  let q;
+  try {
+    q = query(
+      collection(db, COLLECTIONS.APP_LOGS),
+      orderBy('timestamp', 'desc'),
+      limit(maxItems),
+    );
+  } catch {
+    q = query(collection(db, COLLECTIONS.APP_LOGS), limit(maxItems));
+  }
+  const snap = await getDocs(q);
+  const logs: AppLog[] = [];
+  snap.forEach((d) => {
+    const data = d.data();
+    logs.push({
+      id: d.id,
+      level: (data.level ?? 'INFO').toString(),
+      message: (data.message ?? '').toString(),
+      user_name: data.user_name,
+      ip_address: data.ip_address,
+      created_at_local: data.created_at_local,
+      details: data.details,
+    });
+  });
+  return logs;
+}
+
+// ─────────────────────────────────────────────────────────────────
+// Diagnostics
+// ─────────────────────────────────────────────────────────────────
+
+/** Egyszerű kapcsolat-teszt: ír/olvas/töröl egy ping doc-ot. */
+export async function pingFirestore(): Promise<boolean> {
+  const ref = doc(db, 'test_ping', 'ping');
+  await setDoc(ref, { timestamp: serverTimestamp() });
+  const snap = await getDocs(query(collection(db, 'test_ping'), limit(1)));
+  let ok = !snap.empty;
+  await deleteDoc(ref);
+  return ok;
+}
+
+// ─────────────────────────────────────────────────────────────────
+// Lekérdezés egy adott napra történt jelenléteket (admin reg ellenőrzéshez)
+// ─────────────────────────────────────────────────────────────────
+
+export async function getAttendanceForDate(date: string): Promise<string[]> {
+  const map = await getAttendeesByDates([date]);
+  return map.get(date) ?? [];
 }

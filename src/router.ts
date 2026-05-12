@@ -14,6 +14,12 @@ import { renderOverviewPage } from './pages/overview';
 import { renderProfilePage } from './pages/profile';
 import { renderQrPage } from './pages/qr';
 import { renderMembersPage } from './pages/members';
+import { renderDatabasePage } from './pages/database';
+import { renderAdminPage } from './pages/admin';
+import { renderSettingsPage } from './pages/settings';
+import { renderDiagnosticsPage } from './pages/diagnostics';
+import { renderAccountingPage } from './pages/accounting';
+import { renderPaymentsPage } from './pages/payments';
 import { onAuthChange, signIn, signOut } from './lib/auth';
 
 type Route = {
@@ -22,10 +28,18 @@ type Route = {
 };
 
 const ROUTES: Route[] = [
-  { pattern: /^#?\/?$/,           render: renderOverviewPage },
-  { pattern: /^#?\/profile\/?$/,  render: renderProfilePage },
-  { pattern: /^#?\/qr\/?$/,       render: renderQrPage },
-  { pattern: /^#?\/members\/?$/,  render: renderMembersPage },
+  // Publikus
+  { pattern: /^#?\/?$/,             render: renderOverviewPage },
+  { pattern: /^#?\/profile\/?$/,    render: renderProfilePage },
+  { pattern: /^#?\/database\/?$/,   render: renderDatabasePage },
+  { pattern: /^#?\/qr\/?$/,         render: renderQrPage },
+  // Admin
+  { pattern: /^#?\/admin\/?$/,       render: renderAdminPage },
+  { pattern: /^#?\/members\/?$/,     render: renderMembersPage },
+  { pattern: /^#?\/accounting\/?$/,  render: renderAccountingPage },
+  { pattern: /^#?\/payments\/?$/,    render: renderPaymentsPage },
+  { pattern: /^#?\/settings\/?$/,    render: renderSettingsPage },
+  { pattern: /^#?\/diagnostics\/?$/, render: renderDiagnosticsPage },
 ];
 
 function currentHash(): string {

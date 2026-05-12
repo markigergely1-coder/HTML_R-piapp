@@ -1,12 +1,25 @@
 /**
  * Osztott Header komponens — frosted glass sticky nav + tab navigáció + auth blokk.
  * Design: Claude Design / Röpi-app — glass, logo SVG, accent tab indicator.
+ *
+ * 10 tab horizontális scrollra van állítva mobilon. Az admin-only tabok csak
+ * akkor jelennek meg, ha az aktuális user admin.
  */
 
 import { getAuthState, signIn, signOut } from '../lib/auth';
 import { getInitials } from '../lib/avatar';
 
-export type PageKey = 'overview' | 'profile' | 'qr' | 'members';
+export type PageKey =
+  | 'overview'
+  | 'profile'
+  | 'database'
+  | 'qr'
+  | 'admin'
+  | 'members'
+  | 'accounting'
+  | 'payments'
+  | 'settings'
+  | 'diagnostics';
 
 interface TabDef {
   key: PageKey;
@@ -16,17 +29,31 @@ interface TabDef {
 }
 
 const TABS: TabDef[] = [
-  { key: 'overview', label: 'Alkalmak', href: '#/' },
-  { key: 'profile',  label: 'Profil',   href: '#/profile' },
-  { key: 'qr',       label: 'QR',       href: '#/qr' },
-  { key: 'members',  label: 'Tagok',    href: '#/members', adminOnly: true },
+  // Publikus
+  { key: 'overview',    label: 'Alkalmak',    href: '#/' },
+  { key: 'profile',     label: 'Profil',      href: '#/profile' },
+  { key: 'database',    label: 'Adatbázis',   href: '#/database' },
+  { key: 'qr',          label: 'QR',          href: '#/qr' },
+  // Admin
+  { key: 'admin',       label: 'Regisztráció', href: '#/admin',       adminOnly: true },
+  { key: 'members',     label: 'Tagok',       href: '#/members',     adminOnly: true },
+  { key: 'accounting',  label: 'Elszámolás',  href: '#/accounting',  adminOnly: true },
+  { key: 'payments',    label: 'Befizetések', href: '#/payments',    adminOnly: true },
+  { key: 'settings',    label: 'Kivételek',   href: '#/settings',    adminOnly: true },
+  { key: 'diagnostics', label: 'Diagnosztika',href: '#/diagnostics', adminOnly: true },
 ];
 
 const PAGE_LABEL: Record<PageKey, string> = {
-  overview: 'Alkalmak',
-  profile:  'Profil',
-  qr:       'Check-in',
-  members:  'Tagok',
+  overview:    'Alkalmak',
+  profile:     'Profil',
+  database:    'Adatbázis',
+  qr:          'Check-in',
+  admin:       'Regisztráció',
+  members:     'Tagok',
+  accounting:  'Elszámolás',
+  payments:    'Befizetések',
+  settings:    'Kivételek',
+  diagnostics: 'Diagnosztika',
 };
 
 export function renderHeader(currentPage: PageKey): string {
@@ -38,7 +65,7 @@ export function renderHeader(currentPage: PageKey): string {
       const active = t.key === currentPage;
       return `
         <a href="${t.href}"
-           class="px-3 py-2.5 text-[13px] font-medium relative"
+           class="flex-none px-3 py-2.5 text-[13px] font-medium relative whitespace-nowrap"
            style="color: ${active ? 'var(--fg-1)' : 'var(--fg-3)'}">
           ${t.label}
           ${active ? `<span class="absolute left-3 right-3 bottom-0 h-[2px] rounded-full" style="background:var(--accent)"></span>` : ''}
@@ -60,8 +87,8 @@ export function renderHeader(currentPage: PageKey): string {
           ${renderAuthBlock()}
         </div>
       </div>
-      <nav class="px-3 -mt-1">
-        <div class="flex gap-1">
+      <nav class="-mt-1">
+        <div id="header-nav-scroller" class="flex gap-1 overflow-x-auto no-scrollbar px-3 pb-0.5">
           ${tabs}
         </div>
       </nav>
@@ -86,7 +113,7 @@ function renderAuthBlock(): string {
   const auth = getAuthState();
 
   if (auth.loading) {
-    return `<div class="w-8 h-8 rounded-full bg-zinc-100 animate-pulse"></div>`;
+    return `<div class="w-8 h-8 rounded-full animate-pulse" style="background:var(--line)"></div>`;
   }
 
   if (!auth.user) {
@@ -101,7 +128,7 @@ function renderAuthBlock(): string {
   const name = auth.user.displayName || auth.user.email || '?';
   const initials = getInitials(name);
   const adminBadge = auth.isAdmin
-    ? `<span class="absolute -bottom-0.5 -right-0.5 w-3 h-3 rounded-full bg-emerald-500 border-2 border-white" title="Admin"></span>`
+    ? `<span class="absolute -bottom-0.5 -right-0.5 w-3 h-3 rounded-full bg-emerald-500" style="border:2px solid var(--bg-card)" title="Admin"></span>`
     : '';
 
   return `
@@ -122,6 +149,9 @@ function renderAuthBlock(): string {
 
 /**
  * Be kell hívni a render UTÁN, miután az `innerHTML` átment a DOM-ba.
+ * Megjegyzés: a router globálisan kezeli a header-signin / header-signout
+ * eseményeket event delegationnel, így ez most opcionális — de pages-ek
+ * hívhatják, ha közvetlenebb DOM-szintű kötést akarnak.
  */
 export function attachHeaderHandlers(container: HTMLElement) {
   container.querySelector<HTMLButtonElement>('#header-signin')?.addEventListener('click', async () => {
@@ -130,6 +160,19 @@ export function attachHeaderHandlers(container: HTMLElement) {
   container.querySelector<HTMLButtonElement>('#header-signout')?.addEventListener('click', async () => {
     try { await signOut(); } catch (e) { console.warn('Sign-out failed:', e); }
   });
+
+  // Az aktív tab automatikusan görgessen látható helyzetbe
+  const scroller = container.querySelector<HTMLElement>('#header-nav-scroller');
+  if (scroller) {
+    const active = scroller.querySelector<HTMLAnchorElement>('a > span');
+    const activeLink = active?.parentElement as HTMLAnchorElement | null;
+    if (activeLink) {
+      requestAnimationFrame(() => {
+        const targetLeft = activeLink.offsetLeft - (scroller.offsetWidth - activeLink.offsetWidth) / 2;
+        scroller.scrollTo({ left: Math.max(0, targetLeft), behavior: 'instant' });
+      });
+    }
+  }
 }
 
 function escapeHtml(s: string): string {
