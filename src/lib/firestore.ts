@@ -6,6 +6,7 @@
 import {
   collection,
   getDocs,
+  getDoc,
   query,
   where,
   addDoc,
@@ -292,15 +293,157 @@ export async function getAllSettlements(): Promise<Settlement[]> {
   const list: Settlement[] = [];
   snap.forEach((d) => {
     const data = d.data();
+    // Python `month_num` mezőt használ, korábbi TS kód `month`-ot — mindkettőre tűrünk
     list.push({
       id: d.id,
       year: Number(data.year ?? 0),
-      month: Number(data.month ?? 0),
+      month: Number(data.month_num ?? data.month ?? 0),
       month_name: data.month_name,
       saved_at: data.saved_at,
     });
   });
   return list.sort((a, b) => (b.year - a.year) || (b.month - a.month));
+}
+
+// ─────────────────────────────────────────────────────────────────
+// Settlement teljes részletek (kalkuláció eredménye) — Python kompat
+// ─────────────────────────────────────────────────────────────────
+
+/**
+ * Egy elmentett elszámolás teljes részletei (mind a per-session, mind
+ * a per-person tábla).
+ *
+ * Python kompatibilis Firestore formátum:
+ *   - `df_elszamolas`: JSON string, magyar oszlopnevekkel
+ *   - `df_osszesito`: JSON string, magyar oszlopnevekkel
+ */
+export interface SettlementBreakdownRow {
+  date: string;
+  costPerSession: number;
+  attendeeCount: number;
+  costPerPerson: number;
+}
+
+export interface SettlementPersonRow {
+  name: string;
+  count: number;
+  amount: number;
+}
+
+export interface FullSettlement {
+  id: string;
+  year: number;
+  month: number;
+  monthName: string;
+  breakdown: SettlementBreakdownRow[];
+  perPerson: SettlementPersonRow[];
+}
+
+function docIdFor(year: number, month: number): string {
+  return `${year}-${String(month).padStart(2, '0')}`;
+}
+
+/** Letölt egy mentett elszámolást (Python format is kompatibilis). */
+export async function getSettlement(year: number, month: number): Promise<FullSettlement | null> {
+  const ref = doc(db, COLLECTIONS.SETTLEMENTS, docIdFor(year, month));
+  const snap = await getDoc(ref);
+  if (!snap.exists()) return null;
+  const data = snap.data();
+  const monthName = (data.month_name ?? '').toString();
+
+  // df_elszamolas és df_osszesito Python json string formátumban
+  let breakdown: SettlementBreakdownRow[] = [];
+  let perPerson: SettlementPersonRow[] = [];
+
+  try {
+    if (typeof data.df_elszamolas === 'string') {
+      const arr = JSON.parse(data.df_elszamolas) as Array<Record<string, string | number>>;
+      breakdown = arr.map((row) => ({
+        date: String(row['Dátum'] ?? ''),
+        costPerSession: parseNumberLikeHuf(row['Költség \\ alkalom']),
+        attendeeCount: parseNumberLikeFo(row['Létszám']),
+        costPerPerson: parseNumberLikeHuf(row['Költség \\ Fő']),
+      }));
+    } else if (Array.isArray(data.breakdown)) {
+      breakdown = data.breakdown as SettlementBreakdownRow[];
+    }
+    if (typeof data.df_osszesito === 'string') {
+      const arr = JSON.parse(data.df_osszesito) as Array<Record<string, string | number>>;
+      perPerson = arr.map((row) => ({
+        name: String(row['Név'] ?? ''),
+        count: Number(row['Részvétel száma'] ?? 0),
+        amount: Number(row['Fizetendő (Ft)'] ?? 0),
+      }));
+    } else if (Array.isArray(data.perPerson)) {
+      perPerson = data.perPerson as SettlementPersonRow[];
+    }
+  } catch (err) {
+    console.warn('[getSettlement] parse error:', err);
+  }
+
+  return {
+    id: snap.id,
+    year: Number(data.year ?? year),
+    month: Number(data.month_num ?? data.month ?? month),
+    monthName,
+    breakdown,
+    perPerson,
+  };
+}
+
+/**
+ * Elmenti egy elszámolás teljes részleteit. Python formátumban tárol,
+ * hogy a Streamlit oldal is olvashassa.
+ */
+export async function saveSettlement(input: {
+  year: number;
+  month: number;
+  monthName: string;
+  breakdown: SettlementBreakdownRow[];
+  perPerson: SettlementPersonRow[];
+}): Promise<string> {
+  const id = docIdFor(input.year, input.month);
+  const df_elszamolas = input.breakdown.map((b) => ({
+    'Dátum': b.date,
+    'Költség \\ alkalom': `${Math.round(b.costPerSession)} Ft`,
+    'Létszám': `${b.attendeeCount} fő`,
+    'Költség \\ Fő': `${Math.round(b.costPerPerson)} Ft`,
+  }));
+  const df_osszesito = input.perPerson.map((p) => ({
+    'Név': p.name,
+    'Részvétel száma': p.count,
+    'Fizetendő (Ft)': p.amount,
+  }));
+  await setDoc(doc(db, COLLECTIONS.SETTLEMENTS, id), {
+    year: input.year,
+    month_num: input.month,
+    month_name: input.monthName,
+    df_elszamolas: JSON.stringify(df_elszamolas),
+    df_osszesito: JSON.stringify(df_osszesito),
+    saved_at: serverTimestamp(),
+  });
+  return id;
+}
+
+/** "1234 Ft" / 1234 / "1234.5" → 1234.5 */
+function parseNumberLikeHuf(v: unknown): number {
+  if (typeof v === 'number') return v;
+  if (typeof v === 'string') {
+    const s = v.replace(/Ft/gi, '').replace(/\s/g, '').replace(',', '.');
+    const n = Number(s);
+    return Number.isFinite(n) ? n : 0;
+  }
+  return 0;
+}
+
+/** "12 fő" → 12 */
+function parseNumberLikeFo(v: unknown): number {
+  if (typeof v === 'number') return v;
+  if (typeof v === 'string') {
+    const m = v.match(/-?\d+/);
+    return m ? Number(m[0]) : 0;
+  }
+  return 0;
 }
 
 // ─────────────────────────────────────────────────────────────────

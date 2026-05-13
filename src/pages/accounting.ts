@@ -1,23 +1,52 @@
 /**
  * 💰 Havi Elszámolás — admin-only.
  *
- * MVP scope:
- *   - Megjeleníti az elmentett settlements + invoices összesítését
- *   - Havonkénti bontás (év szerint csoportosítva)
- *   - "Új elszámolás generálása" még coming soon — komplex számítás (Python verziót portolni kell)
+ * Funkcionalitás (Python `accounting.py` port):
+ *   - Számla (invoice) kiválasztása
+ *   - "Elszámolás Kalkulálása" → kalkuláció + automatikus mentés Firestore-ba
+ *   - Mentett elszámolás betöltése (ha létezik)
+ *   - Bontás alkalmanként + személyenkénti összesítő
+ *   - Tömeges elszámolás-generálás az összes számlára
  */
 
 import { renderHeader } from '../components/header';
 import { getAuthState, onAuthChange, signIn } from '../lib/auth';
-import { getAllSettlements, getAllInvoices, type Settlement, type Invoice } from '../lib/firestore';
+import {
+  getAllSettlements,
+  getAllInvoices,
+  getAllAttendanceRecords,
+  getCancelledSessions,
+  getSettlement,
+  saveSettlement,
+  type Settlement,
+  type Invoice,
+  type FullSettlement,
+} from '../lib/firestore';
+import { calculateMonthlyAccounting, type AccountingResult } from '../lib/accounting';
 import { formatHuf } from '../lib/cost';
 import { MONTHS_HU } from '../lib/config';
 
 interface AccState {
   settlements: Settlement[];
   invoices: Invoice[];
-  yearFilter: number | 'all';
+  selectedInvoiceId: string | null;
+  loadedCalc: AccountingResult | FullSettlement | null;
+  loadedFromCache: boolean;
+  calculating: boolean;
+  bulkRunning: boolean;
+  bulkForce: boolean;
+  bulkResult: BulkResult | null;
+  toast: { kind: 'success' | 'error' | 'info'; msg: string } | null;
 }
+
+interface BulkResult {
+  ok: { label: string; year: number; month: number; people: number; total: number }[];
+  skipped: { label: string }[];
+  failed: { label: string; reason: string }[];
+  total: number;
+}
+
+let toastTimer: number | null = null;
 
 // ─────────────────────────────────────────────────────────────────
 // Belépési pont
@@ -36,8 +65,25 @@ export async function renderAccountingPage(container: HTMLElement): Promise<void
   const state: AccState = {
     settlements,
     invoices,
-    yearFilter: 'all',
+    selectedInvoiceId: invoices[0]?.id ?? null,
+    loadedCalc: null,
+    loadedFromCache: false,
+    calculating: false,
+    bulkRunning: false,
+    bulkForce: false,
+    bulkResult: null,
+    toast: null,
   };
+
+  // Ha van első invoice és van hozzá mentett elszámolás, betöltjük előre
+  if (state.selectedInvoiceId) {
+    const inv = invoices.find((i) => i.id === state.selectedInvoiceId)!;
+    const existing = await getSettlement(inv.target_year, inv.target_month);
+    if (existing) {
+      state.loadedCalc = existing;
+      state.loadedFromCache = true;
+    }
+  }
 
   rerender(container, state);
 
@@ -111,33 +157,23 @@ function showNoPermissionGate(container: HTMLElement, email: string): void {
 
 function renderBody(state: AccState): string {
   const totalAmount = state.invoices.reduce((s, i) => s + i.amount, 0);
-  const yearsFromInvoices = [...new Set(state.invoices.map((i) => i.target_year).filter(Boolean))].sort((a, b) => b - a);
-  const yearsFromSettlements = [...new Set(state.settlements.map((s) => s.year).filter(Boolean))].sort((a, b) => b - a);
-  const allYears = [...new Set([...yearsFromInvoices, ...yearsFromSettlements])].sort((a, b) => b - a);
 
-  // Csoportosítás év → hónap → {invoice?, settlement?}
-  const groups = new Map<number, Map<number, { invoice?: Invoice; settlement?: Settlement }>>();
-  for (const inv of state.invoices) {
-    if (state.yearFilter !== 'all' && inv.target_year !== state.yearFilter) continue;
-    if (!groups.has(inv.target_year)) groups.set(inv.target_year, new Map());
-    const yearMap = groups.get(inv.target_year)!;
-    if (!yearMap.has(inv.target_month)) yearMap.set(inv.target_month, {});
-    yearMap.get(inv.target_month)!.invoice = inv;
-  }
-  for (const s of state.settlements) {
-    if (state.yearFilter !== 'all' && s.year !== state.yearFilter) continue;
-    if (!groups.has(s.year)) groups.set(s.year, new Map());
-    const yearMap = groups.get(s.year)!;
-    if (!yearMap.has(s.month)) yearMap.set(s.month, {});
-    yearMap.get(s.month)!.settlement = s;
+  if (state.invoices.length === 0) {
+    return `
+      <div class="px-5 pt-5 pb-12">
+        <div class="card-soft p-8 text-center" style="border-radius:22px">
+          <div class="text-3xl mb-2">📭</div>
+          <p class="text-[14px] font-semibold text-fg-1">Nincs számla</p>
+          <p class="text-[12px] text-fg-3 mt-1">Először szinkronizáld a számlákat az Adatbázis oldalról.</p>
+        </div>
+      </div>`;
   }
 
-  const sortedYears = [...groups.keys()].sort((a, b) => b - a);
-
-  const yearOptions = [
-    `<option value="all" ${state.yearFilter === 'all' ? 'selected' : ''}>Mind</option>`,
-    ...allYears.map((y) => `<option value="${y}" ${state.yearFilter === y ? 'selected' : ''}>${y}</option>`),
-  ].join('');
+  const invoiceOptions = state.invoices.map((inv) => {
+    const monthName = MONTHS_HU[inv.target_month - 1] ?? `${inv.target_month}. hó`;
+    const label = `${inv.target_year}. ${monthName} (Számla: ${inv.inv_date} · ${formatHuf(inv.amount)})`;
+    return `<option value="${eh(inv.id)}" ${inv.id === state.selectedInvoiceId ? 'selected' : ''}>${eh(label)}</option>`;
+  }).join('');
 
   return `
     <div class="px-5 pt-5 pb-12 lg:px-6 lg:pt-5 space-y-4">
@@ -148,33 +184,29 @@ function renderBody(state: AccState): string {
         ${statCard('Össz.',      totalAmount,              'emerald', true)}
       </div>
 
-      <!-- Coming soon banner -->
-      <div class="card-soft p-3.5 flex items-center gap-3 fade-up" style="border-radius:16px">
-        <span class="text-xl">🚧</span>
-        <div class="flex-1 min-w-0">
-          <p class="text-[12.5px] font-semibold text-fg-1">Új elszámolás generálása — hamarosan</p>
-          <p class="text-[11px] text-fg-3">A számítási logika portolása folyamatban (Python → TypeScript).</p>
-        </div>
-      </div>
-
-      <!-- Év szűrő -->
-      <div class="card flex items-center gap-2 p-3 fade-up" style="border-radius:16px">
-        <span class="eyebrow text-[10px]">Év:</span>
-        <select id="acc-year-filter"
-          class="select-native rounded-[10px] border px-2.5 py-1.5 text-[12px] font-medium text-fg-1 focus:outline-none"
+      <!-- Invoice kiválasztó + Kalkulálás -->
+      <div class="card p-4 fade-up" style="border-radius:18px">
+        <p class="eyebrow text-[10px] mb-2">Hónap kiválasztása</p>
+        <select id="acc-invoice-sel"
+          class="select-native w-full rounded-[10px] border px-3 py-2 text-[13px] font-medium text-fg-1 focus:outline-none"
           style="border-color:var(--line-strong); background:var(--bg-card)">
-          ${yearOptions}
+          ${invoiceOptions}
         </select>
+        <button id="acc-calc-btn"
+          class="mt-3 w-full px-4 py-2.5 rounded-full text-white text-[13px] font-semibold transition-colors ${state.calculating ? 'opacity-60 cursor-not-allowed' : ''}"
+          style="background:var(--accent)"
+          ${state.calculating ? 'disabled' : ''}>
+          ${state.calculating ? 'Kalkulálás…' : 'Elszámolás Kalkulálása 🚀'}
+        </button>
       </div>
 
-      <!-- Csoportok év szerint -->
-      ${sortedYears.length === 0
-        ? `<div class="card-soft p-8 text-center fade-up" style="border-radius:22px">
-            <div class="text-3xl mb-2">📭</div>
-            <p class="text-[14px] font-semibold text-fg-1">Nincs adat</p>
-            <p class="text-[12px] text-fg-3 mt-1">Még nincsenek mentett elszámolások vagy számlák.</p>
-          </div>`
-        : sortedYears.map((y) => renderYearGroup(y, groups.get(y)!)).join('')}
+      <!-- Mentett elszámolás eredménye -->
+      ${state.loadedCalc ? renderCalcResult(state) : ''}
+
+      <!-- Tömeges szekció -->
+      ${renderBulkSection(state)}
+
+      ${state.toast ? renderToast(state.toast) : ''}
     </div>`;
 }
 
@@ -197,68 +229,291 @@ function statCard(label: string, value: number, tone: 'red' | 'sky' | 'emerald',
     </div>`;
 }
 
-function renderYearGroup(year: number, months: Map<number, { invoice?: Invoice; settlement?: Settlement }>): string {
-  const sortedMonths = [...months.keys()].sort((a, b) => b - a);
+function renderCalcResult(state: AccState): string {
+  const c = state.loadedCalc!;
+  const monthName = 'monthName' in c ? c.monthName : '';
+  const year = c.year;
+  const breakdown = c.breakdown ?? [];
+  const perPerson = c.perPerson ?? [];
 
-  const totalYear = sortedMonths.reduce((s, m) => s + (months.get(m)!.invoice?.amount ?? 0), 0);
+  const totalPaid = perPerson.reduce((s, p) => s + p.amount, 0);
 
-  const rows = sortedMonths.map((m) => {
-    const { invoice, settlement } = months.get(m)!;
-    const monthName = MONTHS_HU[m - 1] ?? `${m}. hó`;
-    return `
-      <li class="px-4 py-3 flex items-center gap-3" style="border-top:1px solid var(--line)">
-        <div class="w-9 h-9 rounded-lg flex items-center justify-center flex-shrink-0"
-             style="background:color-mix(in oklab,var(--accent) 10%,transparent);color:var(--accent-ink)">
-          <span class="text-[11px] font-bold">${m.toString().padStart(2, '0')}</span>
-        </div>
-        <div class="flex-1 min-w-0">
-          <p class="text-[13px] font-semibold text-fg-1 truncate">${eh(monthName)}</p>
-          <div class="flex items-center gap-2 mt-0.5">
-            ${invoice
-              ? `<span class="text-[10px] font-semibold px-1.5 py-0.5 rounded" style="background:color-mix(in oklab,var(--accent) 12%,transparent);color:var(--accent-ink)">Számla</span>`
-              : ''}
-            ${settlement
-              ? `<span class="text-[10px] font-semibold px-1.5 py-0.5 rounded" style="background:rgba(16,185,129,0.14);color:#047857">Elszámolt</span>`
-              : ''}
-            ${!invoice && !settlement ? '<span class="text-[10.5px] text-fg-3">Nincs adat</span>' : ''}
-          </div>
-        </div>
-        ${invoice ? `<span class="font-mono-tnum font-semibold text-[13px] text-fg-1">${eh(formatHuf(invoice.amount))}</span>` : ''}
-      </li>`;
-  }).join('');
+  const statusBadge = state.loadedFromCache
+    ? `<span class="text-[10px] font-semibold px-2 py-0.5 rounded-full" style="background:rgba(14,165,233,0.14);color:#0369a1">💾 Mentett</span>`
+    : `<span class="text-[10px] font-semibold px-2 py-0.5 rounded-full" style="background:rgba(16,185,129,0.14);color:#047857">✅ Most kalkulálva</span>`;
+
+  const breakdownRows = breakdown.map((b) => `
+    <tr style="border-top:1px solid var(--line)">
+      <td class="px-3 py-2 text-[12px] font-medium text-fg-1">${eh(b.date)}</td>
+      <td class="px-3 py-2 text-[12px] text-fg-2 text-right font-mono-tnum">${eh(formatHuf(b.costPerSession))}</td>
+      <td class="px-3 py-2 text-[12px] text-fg-2 text-right font-mono-tnum">${b.attendeeCount} fő</td>
+      <td class="px-3 py-2 text-[12px] text-fg-1 text-right font-mono-tnum font-semibold">${eh(formatHuf(b.costPerPerson))}</td>
+    </tr>
+  `).join('');
+
+  const personRows = perPerson.map((p) => `
+    <tr style="border-top:1px solid var(--line)">
+      <td class="px-3 py-2 text-[12px] font-medium text-fg-1">${eh(p.name)}</td>
+      <td class="px-3 py-2 text-[12px] text-fg-2 text-right font-mono-tnum">${p.count}</td>
+      <td class="px-3 py-2 text-[12px] text-fg-1 text-right font-mono-tnum font-semibold">${eh(formatHuf(p.amount))}</td>
+    </tr>
+  `).join('');
 
   return `
-    <div class="card overflow-hidden fade-up" style="border-radius:22px">
+    <div class="card fade-up overflow-hidden" style="border-radius:20px">
       <div class="px-4 py-3 flex items-center justify-between" style="border-bottom:1px solid var(--line)">
         <div>
-          <p class="eyebrow text-[10px] mb-0.5">Év</p>
-          <p class="text-[16px] font-bold text-fg-1">${year}</p>
+          <p class="eyebrow text-[10px] mb-0.5">Elszámolás</p>
+          <p class="text-[15px] font-bold text-fg-1">${eh(year + '. ' + monthName)}</p>
         </div>
-        <div class="text-right">
-          <p class="eyebrow text-[10px] mb-0.5">Összesen</p>
-          <p class="font-mono-tnum font-semibold text-[14px] text-fg-1">${eh(formatHuf(totalYear))}</p>
+        ${statusBadge}
+      </div>
+
+      <!-- Per session breakdown -->
+      <div class="px-4 pt-3">
+        <p class="eyebrow text-[10px] mb-2">Bontás alkalmanként</p>
+        <div class="rounded-lg overflow-hidden" style="border:1px solid var(--line)">
+          <table class="w-full" style="border-collapse:collapse">
+            <thead style="background:var(--bg-elev)">
+              <tr>
+                <th class="px-3 py-2 text-[10.5px] text-left font-semibold text-fg-3 uppercase tracking-wider">Dátum</th>
+                <th class="px-3 py-2 text-[10.5px] text-right font-semibold text-fg-3 uppercase tracking-wider">Költség / alk.</th>
+                <th class="px-3 py-2 text-[10.5px] text-right font-semibold text-fg-3 uppercase tracking-wider">Létszám</th>
+                <th class="px-3 py-2 text-[10.5px] text-right font-semibold text-fg-3 uppercase tracking-wider">Költség / fő</th>
+              </tr>
+            </thead>
+            <tbody>${breakdownRows || '<tr><td colspan="4" class="px-3 py-3 text-center text-[12px] text-fg-3">Nincs adat</td></tr>'}</tbody>
+          </table>
         </div>
       </div>
-      <ul>${rows}</ul>
-    </div>`;
+
+      <!-- Per person summary -->
+      <div class="px-4 pt-4 pb-4">
+        <p class="eyebrow text-[10px] mb-2">Személyenkénti összesítő</p>
+        <div class="rounded-lg overflow-hidden" style="border:1px solid var(--line)">
+          <table class="w-full" style="border-collapse:collapse">
+            <thead style="background:var(--bg-elev)">
+              <tr>
+                <th class="px-3 py-2 text-[10.5px] text-left font-semibold text-fg-3 uppercase tracking-wider">Név</th>
+                <th class="px-3 py-2 text-[10.5px] text-right font-semibold text-fg-3 uppercase tracking-wider">Részvétel</th>
+                <th class="px-3 py-2 text-[10.5px] text-right font-semibold text-fg-3 uppercase tracking-wider">Fizetendő</th>
+              </tr>
+            </thead>
+            <tbody>${personRows || '<tr><td colspan="3" class="px-3 py-3 text-center text-[12px] text-fg-3">Nincs adat</td></tr>'}</tbody>
+            ${perPerson.length > 0 ? `
+              <tfoot>
+                <tr style="border-top:2px solid var(--line-strong);background:var(--bg-elev)">
+                  <td class="px-3 py-2 text-[11.5px] font-bold text-fg-1">Összesen</td>
+                  <td class="px-3 py-2 text-[11.5px] text-right font-mono-tnum font-bold text-fg-1">${perPerson.reduce((s, p) => s + p.count, 0)}</td>
+                  <td class="px-3 py-2 text-[11.5px] text-right font-mono-tnum font-bold text-fg-1">${eh(formatHuf(totalPaid))}</td>
+                </tr>
+              </tfoot>` : ''}
+          </table>
+        </div>
+      </div>
+    </div>
+  `;
+}
+
+function renderBulkSection(state: AccState): string {
+  return `
+    <div class="card p-4 fade-up" style="border-radius:18px">
+      <div class="flex items-center gap-2 mb-2">
+        <span class="text-lg">🔄</span>
+        <p class="text-[14px] font-semibold text-fg-1">Összes elszámolás generálása</p>
+      </div>
+      <p class="text-[11.5px] text-fg-3 mb-3 leading-relaxed">
+        Lefuttatja az elszámolás kalkulációt az ÖSSZES Firestore-ban lévő számlára,
+        és menti az eredményt. A profil oldalon ezután pontos éves összegek jelennek meg.
+      </p>
+      <label class="flex items-center gap-2 mb-3 cursor-pointer">
+        <input type="checkbox" id="acc-bulk-force" ${state.bulkForce ? 'checked' : ''}
+          class="rounded" style="accent-color:var(--accent)">
+        <span class="text-[12px] text-fg-2">🔁 Már meglévő elszámolások felülírása (újraszámolás)</span>
+      </label>
+      <button id="acc-bulk-btn"
+        class="w-full px-4 py-2.5 rounded-full text-white text-[13px] font-semibold transition-colors ${state.bulkRunning ? 'opacity-60 cursor-not-allowed' : ''}"
+        style="background:var(--accent)"
+        ${state.bulkRunning ? 'disabled' : ''}>
+        ${state.bulkRunning ? 'Feldolgozás…' : '🚀 Összes elszámolás generálása'}
+      </button>
+      ${state.bulkResult ? renderBulkResult(state.bulkResult) : ''}
+    </div>
+  `;
+}
+
+function renderBulkResult(r: BulkResult): string {
+  const okList = r.ok.length > 0
+    ? `<div class="mt-3 p-2.5 rounded-lg" style="background:rgba(16,185,129,0.10)">
+        <p class="text-[12px] font-semibold mb-1" style="color:#047857">✅ Sikeresen: ${r.ok.length}/${r.total}</p>
+        <ul class="text-[11px] space-y-0.5" style="color:#065f46">
+          ${r.ok.map((o) => `<li>• ${eh(o.label)} — ${o.people} fő, ${eh(formatHuf(o.total))}</li>`).join('')}
+        </ul>
+      </div>`
+    : '';
+  const skipList = r.skipped.length > 0
+    ? `<div class="mt-2 p-2.5 rounded-lg" style="background:rgba(14,165,233,0.10)">
+        <p class="text-[12px] font-semibold mb-1" style="color:#0369a1">⏭️ Kihagyva: ${r.skipped.length}</p>
+        <ul class="text-[11px] space-y-0.5" style="color:#075985">
+          ${r.skipped.map((s) => `<li>• ${eh(s.label)}</li>`).join('')}
+        </ul>
+      </div>`
+    : '';
+  const failList = r.failed.length > 0
+    ? `<div class="mt-2 p-2.5 rounded-lg" style="background:rgba(239,68,68,0.10)">
+        <p class="text-[12px] font-semibold mb-1" style="color:#b91c1c">⚠️ Sikertelen: ${r.failed.length}</p>
+        <ul class="text-[11px] space-y-0.5" style="color:#7f1d1d">
+          ${r.failed.map((f) => `<li>• ${eh(f.label)}: ${eh(f.reason)}</li>`).join('')}
+        </ul>
+      </div>`
+    : '';
+  return `${okList}${skipList}${failList}`;
+}
+
+function renderToast(t: NonNullable<AccState['toast']>): string {
+  const palette = t.kind === 'success'
+    ? { bg: 'rgba(16,185,129,0.14)', col: '#047857' }
+    : t.kind === 'error'
+    ? { bg: 'rgba(239,68,68,0.14)', col: '#b91c1c' }
+    : { bg: 'rgba(14,165,233,0.14)', col: '#0369a1' };
+  return `
+    <div class="fixed left-1/2 -translate-x-1/2 bottom-6 z-50 px-4 py-2.5 rounded-full text-[12.5px] font-semibold shadow-lg"
+         style="background:${palette.bg};color:${palette.col};max-width:90vw">
+      ${eh(t.msg)}
+    </div>
+  `;
 }
 
 // ─────────────────────────────────────────────────────────────────
-// Handlers
+// Re-render + handlers
 // ─────────────────────────────────────────────────────────────────
 
 function rerender(container: HTMLElement, state: AccState) {
-  const body = container.querySelector<HTMLElement>('#acc-body')!;
-  body.innerHTML = renderBody(state);
+  const body = container.querySelector<HTMLElement>('#acc-body');
+  if (body) body.innerHTML = renderBody(state);
+  else container.innerHTML = renderShell(renderBody(state));
   attachHandlers(container, state);
 }
 
 function attachHandlers(container: HTMLElement, state: AccState) {
-  const yearSel = container.querySelector<HTMLSelectElement>('#acc-year-filter');
-  yearSel?.addEventListener('change', () => {
-    state.yearFilter = yearSel.value === 'all' ? 'all' : Number(yearSel.value);
+  const invSel = container.querySelector<HTMLSelectElement>('#acc-invoice-sel');
+  invSel?.addEventListener('change', async () => {
+    state.selectedInvoiceId = invSel.value;
+    state.loadedCalc = null;
+    state.loadedFromCache = false;
+    // Próbáljuk betölteni a mentett elszámolást
+    const inv = state.invoices.find((i) => i.id === state.selectedInvoiceId);
+    if (inv) {
+      const existing = await getSettlement(inv.target_year, inv.target_month);
+      if (existing) {
+        state.loadedCalc = existing;
+        state.loadedFromCache = true;
+      }
+    }
     rerender(container, state);
   });
+
+  const calcBtn = container.querySelector<HTMLButtonElement>('#acc-calc-btn');
+  calcBtn?.addEventListener('click', async () => {
+    const inv = state.invoices.find((i) => i.id === state.selectedInvoiceId);
+    if (!inv) return;
+    state.calculating = true;
+    rerender(container, state);
+    try {
+      const [attendance, cancelled] = await Promise.all([
+        getAllAttendanceRecords(),
+        getCancelledSessions(),
+      ]);
+      const result = calculateMonthlyAccounting(inv, attendance, cancelled, MONTHS_HU);
+      await saveSettlement({
+        year: result.year,
+        month: inv.target_month,
+        monthName: result.monthName,
+        breakdown: result.breakdown,
+        perPerson: result.perPerson,
+      });
+      state.loadedCalc = result;
+      state.loadedFromCache = false;
+      // settlements lista frissítése
+      state.settlements = await getAllSettlements();
+      showToast(state, 'success', `✅ Kalkuláció kész: ${result.year}. ${result.monthName}`);
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      showToast(state, 'error', `❌ ${msg}`);
+    } finally {
+      state.calculating = false;
+      rerender(container, state);
+    }
+  });
+
+  const bulkForce = container.querySelector<HTMLInputElement>('#acc-bulk-force');
+  bulkForce?.addEventListener('change', () => {
+    state.bulkForce = bulkForce.checked;
+  });
+
+  const bulkBtn = container.querySelector<HTMLButtonElement>('#acc-bulk-btn');
+  bulkBtn?.addEventListener('click', async () => {
+    state.bulkRunning = true;
+    state.bulkResult = null;
+    rerender(container, state);
+    try {
+      // Egyszer letöltjük az attendance + cancelled adatokat, és minden invoice-ra használjuk
+      const [attendance, cancelled] = await Promise.all([
+        getAllAttendanceRecords(),
+        getCancelledSessions(),
+      ]);
+      const result: BulkResult = { ok: [], skipped: [], failed: [], total: state.invoices.length };
+      for (const inv of state.invoices) {
+        const monthName = MONTHS_HU[inv.target_month - 1] ?? `${inv.target_month}. hó`;
+        const label = `${inv.target_year}. ${monthName}`;
+        try {
+          if (!state.bulkForce) {
+            const existing = await getSettlement(inv.target_year, inv.target_month);
+            if (existing) {
+              result.skipped.push({ label });
+              continue;
+            }
+          }
+          const calc = calculateMonthlyAccounting(inv, attendance, cancelled, MONTHS_HU);
+          await saveSettlement({
+            year: calc.year,
+            month: inv.target_month,
+            monthName: calc.monthName,
+            breakdown: calc.breakdown,
+            perPerson: calc.perPerson,
+          });
+          const total = calc.perPerson.reduce((s, p) => s + p.amount, 0);
+          result.ok.push({ label, year: calc.year, month: inv.target_month, people: calc.perPerson.length, total });
+        } catch (err) {
+          const msg = err instanceof Error ? err.message : String(err);
+          result.failed.push({ label, reason: msg });
+        }
+      }
+      state.bulkResult = result;
+      state.settlements = await getAllSettlements();
+      showToast(state, 'success', `🎉 Tömeges feldolgozás kész (${result.ok.length}/${result.total})`);
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      showToast(state, 'error', `❌ ${msg}`);
+    } finally {
+      state.bulkRunning = false;
+      rerender(container, state);
+    }
+  });
+}
+
+function showToast(state: AccState, kind: 'success' | 'error' | 'info', msg: string) {
+  state.toast = { kind, msg };
+  if (toastTimer) {
+    window.clearTimeout(toastTimer);
+    toastTimer = null;
+  }
+  toastTimer = window.setTimeout(() => {
+    state.toast = null;
+    // Csak ha a toast még a state-ben van, frissítjük az UI-t
+    const toastEl = document.querySelector('.fixed.bottom-6');
+    if (toastEl) toastEl.remove();
+  }, 3500);
 }
 
 // ─────────────────────────────────────────────────────────────────

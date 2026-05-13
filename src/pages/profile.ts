@@ -31,6 +31,13 @@ function avatarHue(name: string): number {
   return Math.abs(h) % 360;
 }
 
+/** Hash-be ágyazott query string olvasása: pl. "#/profile?name=Kiss" → {name: "Kiss"} */
+function readHashQuery(): URLSearchParams {
+  const hash = window.location.hash || '';
+  const qIdx = hash.indexOf('?');
+  return new URLSearchParams(qIdx >= 0 ? hash.slice(qIdx + 1) : '');
+}
+
 // ─── Belépési pont ───
 export async function renderProfilePage(container: HTMLElement): Promise<void> {
   container.innerHTML = renderShell(renderLoadingBody());
@@ -45,6 +52,10 @@ export async function renderProfilePage(container: HTMLElement): Promise<void> {
       .map((r) => Number(r.event_date.slice(0, 4))).filter(Number.isFinite).map(String),
   ).map(Number).sort((a, b) => b - a);
 
+  // URL-ből érkező név preselect (pl. Alkalmak oldalról linkkel)
+  const queryName = readHashQuery().get('name');
+  const initialName = queryName && playerNames.includes(queryName) ? queryName : playerNames[0];
+
   const now = new Date();
   const currentYear = now.getFullYear();
   const currentMonth = now.getMonth() + 1;
@@ -52,7 +63,7 @@ export async function renderProfilePage(container: HTMLElement): Promise<void> {
     allRecords, playerNames,
     availableYears: availableYears.length ? availableYears : [currentYear],
     currentYear, currentMonth,
-    selectedName: playerNames[0],
+    selectedName: initialName,
     selectedYear: availableYears.includes(currentYear) ? currentYear : availableYears[0] || currentYear,
     playerSessions: [],
   };

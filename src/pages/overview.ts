@@ -14,9 +14,23 @@ import {
   dayOf,
   formatDateHuLong,
 } from '../lib/dates';
-import { getAttendeesByDates, getCancelledSessions, type CancelledSession } from '../lib/firestore';
+import {
+  getAttendeesByDates,
+  getCancelledSessions,
+  getAllAttendanceRecords,
+  getAllMembers,
+  type CancelledSession,
+} from '../lib/firestore';
 import { getInitials } from '../lib/avatar';
 import { renderHeader } from '../components/header';
+
+/** Egy játékos összesített statisztikái a hover tooltip-hez. */
+interface PlayerStats {
+  totalSessions: number;       // Összes igazolt részvétel (Yes - No)
+  firstDate: string | null;    // Első részvétel dátuma
+  lastDate: string | null;     // Legutóbbi részvétel dátuma
+  email: string | null;        // Email a members kollekcióból
+}
 
 interface OverviewState {
   dates: string[];
@@ -24,6 +38,7 @@ interface OverviewState {
   selected: string;
   attendeesByDate: Map<string, string[]>;
   cancelled: Map<string, CancelledSession>;
+  playerStats: Map<string, PlayerStats>;
 }
 
 // ─── Belépési pont ───
@@ -31,11 +46,17 @@ export async function renderOverviewPage(container: HTMLElement): Promise<void> 
   container.innerHTML = renderLoadingShell();
 
   const dates = generateTuesdayDates(8, 1);
-  const [attendeesByDate, cancelled] = await Promise.all([
+  const [attendeesByDate, cancelled, allRecords, members] = await Promise.all([
     getAttendeesByDates(dates),
     getCancelledSessions(),
+    getAllAttendanceRecords(),
+    // Members optional — ha permission-denied vagy más hiba, üres lista
+    getAllMembers().catch(() => []),
   ]);
   const upcoming = upcomingTuesday(dates);
+
+  // Statisztikák összesítése: ki hány alkalmon volt + első/utolsó dátum
+  const playerStats = computePlayerStats(allRecords, members);
 
   const state: OverviewState = {
     dates,
@@ -43,10 +64,53 @@ export async function renderOverviewPage(container: HTMLElement): Promise<void> 
     selected: upcoming,
     attendeesByDate,
     cancelled,
+    playerStats,
   };
 
   container.innerHTML = renderShell(state);
   attachHandlers(container, state);
+}
+
+function computePlayerStats(
+  records: { name: string; status: string; event_date: string }[],
+  members: { name: string; email: string }[],
+): Map<string, PlayerStats> {
+  const yesByPlayer = new Map<string, Set<string>>();
+  const noByPlayer = new Map<string, Set<string>>();
+
+  for (const r of records) {
+    const n = r.name?.trim();
+    if (!n || !r.event_date) continue;
+    if (r.status === 'Yes') {
+      if (!yesByPlayer.has(n)) yesByPlayer.set(n, new Set());
+      yesByPlayer.get(n)!.add(r.event_date);
+    } else if (r.status === 'No') {
+      if (!noByPlayer.has(n)) noByPlayer.set(n, new Set());
+      noByPlayer.get(n)!.add(r.event_date);
+    }
+  }
+
+  // Email lookup (case-insensitive név alapján)
+  const emailByName = new Map<string, string>();
+  for (const m of members) {
+    const n = m.name?.trim().toLowerCase();
+    if (n && m.email) emailByName.set(n, m.email);
+  }
+
+  const result = new Map<string, PlayerStats>();
+  const allNames = new Set([...yesByPlayer.keys(), ...noByPlayer.keys()]);
+  for (const name of allNames) {
+    const yesSet = yesByPlayer.get(name) ?? new Set();
+    const noSet = noByPlayer.get(name) ?? new Set();
+    const confirmed = [...yesSet].filter((d) => !noSet.has(d)).sort();
+    result.set(name, {
+      totalSessions: confirmed.length,
+      firstDate: confirmed[0] ?? null,
+      lastDate: confirmed[confirmed.length - 1] ?? null,
+      email: emailByName.get(name.toLowerCase()) ?? null,
+    });
+  }
+  return result;
 }
 
 // ─── Loading ───
@@ -307,21 +371,42 @@ function renderResult(state: OverviewState): string {
   }
   const attendees = state.attendeesByDate.get(state.selected) ?? [];
   if (attendees.length === 0) return renderEmptyCard(state.selected);
-  return renderAttendeesSection(attendees);
+  return renderAttendeesSection(attendees, state.playerStats);
 }
 
-function renderAttendeesSection(attendees: string[]): string {
+function renderAttendeesSection(attendees: string[], stats: Map<string, PlayerStats>): string {
   const cards = attendees.map((name) => {
     const hue = avatarHue(name);
     const initials = getInitials(name);
+    const profileHref = `#/profile?name=${encodeURIComponent(name)}`;
+    const s = stats.get(name);
+
+    // Tooltip tartalom — text formátum a hover felugró négyzethez
+    const tooltipLines: string[] = [];
+    if (s) {
+      tooltipLines.push(`Összes alkalom: ${s.totalSessions}`);
+      if (s.firstDate) tooltipLines.push(`Első: ${s.firstDate}`);
+      if (s.lastDate)  tooltipLines.push(`Legutóbbi: ${s.lastDate}`);
+      if (s.email)     tooltipLines.push(s.email);
+    }
+    const tooltipDataset = tooltipLines.length > 0
+      ? ` data-tooltip="${ea(tooltipLines.join('\n'))}"`
+      : '';
+
     return `
-      <div class="card flex items-center gap-2.5 px-3 py-2.5 lift" style="border-radius:16px">
+      <a href="${profileHref}"${tooltipDataset}
+         class="attendee-card card flex items-center gap-2.5 px-3 py-2.5 lift no-underline transition-colors hover:bg-[color:var(--bg-elev)]"
+         style="border-radius:16px;color:inherit;text-decoration:none"
+         title="${ea(name)} profilja">
         <div class="rounded-full flex items-center justify-center flex-shrink-0 font-semibold text-[10px]"
              style="width:28px;height:28px;flex-shrink:0;background:linear-gradient(135deg,hsl(${hue} 80% 88%) 0%,hsl(${(hue+30)%360} 75% 78%) 100%);color:hsl(${hue} 60% 30%)">
           ${eh(initials)}
         </div>
-        <span class="text-[12.5px] font-medium text-fg-1">${eh(name)}</span>
-      </div>`;
+        <span class="text-[12.5px] font-medium text-fg-1 truncate">${eh(name)}</span>
+        ${s && s.totalSessions > 0
+          ? `<span class="ml-auto text-[10px] font-mono-tnum text-fg-3 flex-none">${s.totalSessions}×</span>`
+          : ''}
+      </a>`;
   }).join('');
 
   return `
@@ -330,10 +415,21 @@ function renderAttendeesSection(attendees: string[]): string {
         <h2 class="text-[20px] font-semibold tracking-tight text-fg-1">Résztvevők</h2>
         <span class="eyebrow">${attendees.length} fő</span>
       </div>
-      <div class="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-2.5">
+      <div id="attendees-grid" class="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-2.5">
         ${cards}
       </div>
     </div>`;
+}
+
+function ea(s: string): string {
+  // Attribute escape (idézőjel + sortörés-safe)
+  return s
+    .replace(/&/g, '&amp;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#039;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/\n/g, '&#10;');
 }
 
 function renderEmptyCard(date: string): string {
@@ -423,6 +519,8 @@ function renderVolleyballArt(): string {
 
 // ─── Event handling ───
 function attachHandlers(container: HTMLElement, state: OverviewState) {
+  attachTooltip(container);
+
   const scroller = container.querySelector<HTMLDivElement>('#date-scroller')!;
   const rail = container.querySelector<HTMLElement>('#date-rail'); // null desktop alatt is, mert hidden
 
@@ -499,4 +597,89 @@ function eh(s: string): string {
   return s
     .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
     .replace(/"/g, '&quot;').replace(/'/g, '&#039;');
+}
+
+// ─── Tooltip ─────────────────────────────────────────────────
+// Egy globális tooltip elem amit minden [data-tooltip] elem felett
+// megjelenít — több másodperces hover-rel jelenik meg.
+
+const TOOLTIP_DELAY_MS = 600;
+let tooltipShowTimer: number | null = null;
+let tooltipEl: HTMLDivElement | null = null;
+
+function ensureTooltipEl(): HTMLDivElement {
+  if (tooltipEl && document.body.contains(tooltipEl)) return tooltipEl;
+  tooltipEl = document.createElement('div');
+  tooltipEl.style.cssText = [
+    'position:fixed',
+    'z-index:60',
+    'pointer-events:none',
+    'opacity:0',
+    'transition:opacity 0.15s ease',
+    'background:var(--bg-card, #fff)',
+    'color:var(--fg-1, #18181b)',
+    'border:1px solid var(--line, rgba(0,0,0,0.1))',
+    'border-radius:10px',
+    'padding:8px 10px',
+    'font-size:11.5px',
+    'line-height:1.4',
+    'box-shadow:0 6px 22px rgba(0,0,0,0.12)',
+    'max-width:260px',
+    'white-space:pre-line',
+    'font-feature-settings:"tnum"',
+  ].join(';');
+  document.body.appendChild(tooltipEl);
+  return tooltipEl;
+}
+
+function positionTooltip(el: HTMLDivElement, anchor: HTMLElement) {
+  const r = anchor.getBoundingClientRect();
+  const margin = 8;
+  // Próbáljuk a kártya fölé tenni; ha nem fér, alá
+  el.style.left = `${Math.min(window.innerWidth - el.offsetWidth - margin, Math.max(margin, r.left + r.width / 2 - el.offsetWidth / 2))}px`;
+  const above = r.top - el.offsetHeight - margin;
+  if (above > margin) {
+    el.style.top = `${above}px`;
+  } else {
+    el.style.top = `${r.bottom + margin}px`;
+  }
+}
+
+function showTooltip(anchor: HTMLElement, text: string) {
+  const el = ensureTooltipEl();
+  el.textContent = text;
+  // Két frame: először renderelünk hogy a méret tudható legyen, aztán pozícionálunk
+  requestAnimationFrame(() => {
+    positionTooltip(el, anchor);
+    el.style.opacity = '1';
+  });
+}
+
+function hideTooltip() {
+  if (tooltipShowTimer !== null) {
+    window.clearTimeout(tooltipShowTimer);
+    tooltipShowTimer = null;
+  }
+  if (tooltipEl) tooltipEl.style.opacity = '0';
+}
+
+function attachTooltip(container: HTMLElement) {
+  container.addEventListener('mouseover', (e) => {
+    const target = (e.target as HTMLElement).closest<HTMLElement>('[data-tooltip]');
+    if (!target) return;
+    const text = target.getAttribute('data-tooltip') ?? '';
+    if (!text) return;
+    hideTooltip();
+    tooltipShowTimer = window.setTimeout(() => showTooltip(target, text), TOOLTIP_DELAY_MS);
+  });
+  container.addEventListener('mouseout', (e) => {
+    const target = (e.target as HTMLElement).closest<HTMLElement>('[data-tooltip]');
+    if (!target) return;
+    const related = (e as MouseEvent).relatedTarget as HTMLElement | null;
+    if (related && target.contains(related)) return;
+    hideTooltip();
+  });
+  // Mobil érintésnél ne ragadjon — scroll/click idején eltüntetjük
+  container.addEventListener('scroll', hideTooltip, true);
+  window.addEventListener('blur', hideTooltip);
 }

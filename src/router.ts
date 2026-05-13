@@ -43,7 +43,10 @@ const ROUTES: Route[] = [
 ];
 
 function currentHash(): string {
-  return window.location.hash || '#/';
+  const raw = window.location.hash || '#/';
+  // Query string leválasztása a route matching előtt (pl. #/profile?name=Foo → #/profile)
+  const qIdx = raw.indexOf('?');
+  return qIdx >= 0 ? raw.slice(0, qIdx) : raw;
 }
 
 async function dispatch(container: HTMLElement) {

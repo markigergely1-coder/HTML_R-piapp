@@ -99,3 +99,24 @@ export function formatMonthShortHu(dateStr: string): string {
 export function dayOf(dateStr: string): number {
   return new Date(dateStr + 'T12:00:00Z').getUTCDate();
 }
+
+/**
+ * Az adott év/hónap összes keddi dátuma YYYY-MM-DD ISO formátumban.
+ * Python `calendar.monthcalendar` + Tuesday filter logikájának megfelelője.
+ */
+export function getTuesdaysInMonth(year: number, month: number): string[] {
+  // month: 1-12
+  const result: string[] = [];
+  // hónap utolsó napja
+  const lastDay = new Date(Date.UTC(year, month, 0)).getUTCDate();
+  for (let day = 1; day <= lastDay; day++) {
+    const d = new Date(Date.UTC(year, month - 1, day));
+    if (d.getUTCDay() === 2) {
+      // 2 = kedd
+      const mm = String(month).padStart(2, '0');
+      const dd = String(day).padStart(2, '0');
+      result.push(`${year}-${mm}-${dd}`);
+    }
+  }
+  return result;
+}
