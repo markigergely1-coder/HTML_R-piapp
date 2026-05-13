@@ -15,20 +15,34 @@ import {
   getAllSettlements,
   getAllInvoices,
   getAllAttendanceRecords,
+  getAllMembers,
   getCancelledSessions,
   getSettlement,
   saveSettlement,
   type Settlement,
   type Invoice,
   type FullSettlement,
+  type Member,
 } from '../lib/firestore';
 import { calculateMonthlyAccounting, type AccountingResult } from '../lib/accounting';
 import { formatHuf } from '../lib/cost';
 import { MONTHS_HU } from '../lib/config';
 
+interface EmailRecipient {
+  systemName: string;
+  email: string;
+  count: number;       // saját + vendég összesen
+  amount: number;      // saját + vendég Ft összesen
+  ownCount: number;
+  ownAmount: number;
+  guests: { name: string; count: number; amount: number }[];
+  selected: boolean;   // pipálva → küldjük neki
+}
+
 interface AccState {
   settlements: Settlement[];
   invoices: Invoice[];
+  members: Member[];
   selectedInvoiceId: string | null;
   loadedCalc: AccountingResult | FullSettlement | null;
   loadedFromCache: boolean;
@@ -36,6 +50,11 @@ interface AccState {
   bulkRunning: boolean;
   bulkForce: boolean;
   bulkResult: BulkResult | null;
+  // Email küldés
+  emailRecipients: EmailRecipient[];
+  emailAdminToggle: boolean;
+  emailSending: boolean;
+  emailResult: { sent: number; failed: { to: string; reason: string }[]; adminSent: boolean } | null;
   toast: { kind: 'success' | 'error' | 'info'; msg: string } | null;
 }
 
@@ -60,11 +79,16 @@ export async function renderAccountingPage(container: HTMLElement): Promise<void
   if (!auth.user)        return showSignInGate(container);
   if (!auth.isAdmin)     return showNoPermissionGate(container, auth.user.email ?? '');
 
-  const [settlements, invoices] = await Promise.all([getAllSettlements(), getAllInvoices()]);
+  const [settlements, invoices, members] = await Promise.all([
+    getAllSettlements(),
+    getAllInvoices(),
+    getAllMembers().catch(() => [] as Member[]),
+  ]);
 
   const state: AccState = {
     settlements,
     invoices,
+    members,
     selectedInvoiceId: invoices[0]?.id ?? null,
     loadedCalc: null,
     loadedFromCache: false,
@@ -72,6 +96,10 @@ export async function renderAccountingPage(container: HTMLElement): Promise<void
     bulkRunning: false,
     bulkForce: false,
     bulkResult: null,
+    emailRecipients: [],
+    emailAdminToggle: true,
+    emailSending: false,
+    emailResult: null,
     toast: null,
   };
 
@@ -84,6 +112,7 @@ export async function renderAccountingPage(container: HTMLElement): Promise<void
       state.loadedFromCache = true;
     }
   }
+  recomputeEmailRecipients(state);
 
   rerender(container, state);
 
@@ -202,6 +231,9 @@ function renderBody(state: AccState): string {
 
       <!-- Mentett elszámolás eredménye -->
       ${state.loadedCalc ? renderCalcResult(state) : ''}
+
+      <!-- Email küldés szekció -->
+      ${state.loadedCalc ? renderEmailSection(state) : ''}
 
       <!-- Tömeges szekció -->
       ${renderBulkSection(state)}
@@ -326,6 +358,139 @@ function renderCalcResult(state: AccState): string {
   `;
 }
 
+// ─── Email recipients derivation ─────────────────────────────────
+
+function recomputeEmailRecipients(state: AccState) {
+  const calc = state.loadedCalc;
+  if (!calc) {
+    state.emailRecipients = [];
+    return;
+  }
+  const emailByName = new Map<string, { email: string; active: boolean }>();
+  for (const m of state.members) {
+    if (m.name) emailByName.set(m.name.trim(), { email: m.email, active: m.active });
+  }
+
+  const recipients: EmailRecipient[] = [];
+  // Csak főtagok (ne tartalmazza " - "-t)
+  const mainRows = calc.perPerson.filter((p) => !p.name.includes(' - '));
+  for (const main of mainRows) {
+    const lookup = emailByName.get(main.name);
+    if (!lookup || !lookup.email || !lookup.active) continue;
+
+    // Vendég sorok: pontosan ezzel a prefix-szel
+    const prefix = `${main.name} - `;
+    const guests = calc.perPerson
+      .filter((p) => p.name.startsWith(prefix))
+      .map((p) => ({
+        name: p.name.slice(prefix.length),
+        count: p.count,
+        amount: p.amount,
+      }));
+    const guestTotalCount = guests.reduce((s, g) => s + g.count, 0);
+    const guestTotalAmount = guests.reduce((s, g) => s + g.amount, 0);
+
+    const total = main.amount + guestTotalAmount;
+    if (total <= 0) continue;
+
+    recipients.push({
+      systemName: main.name,
+      email: lookup.email,
+      count: main.count + guestTotalCount,
+      amount: total,
+      ownCount: main.count,
+      ownAmount: main.amount,
+      guests,
+      selected: true,
+    });
+  }
+  state.emailRecipients = recipients;
+}
+
+// ─── Email szekció rendering ─────────────────────────────────────
+
+function renderEmailSection(state: AccState): string {
+  if (state.emailRecipients.length === 0) {
+    return `
+      <div class="card p-4 fade-up" style="border-radius:18px">
+        <div class="flex items-center gap-2 mb-1">
+          <span class="text-lg">📧</span>
+          <p class="text-[14px] font-semibold text-fg-1">Email küldés</p>
+        </div>
+        <p class="text-[11.5px] text-fg-3">Nincs aktív tag email-címmel ehhez az elszámoláshoz. (A Tagok oldalon vegyél fel embereket email-lel.)</p>
+      </div>`;
+  }
+
+  const selectedCount = state.emailRecipients.filter((r) => r.selected).length;
+
+  const rows = state.emailRecipients.map((r, idx) => {
+    const guestSummary = r.guests.length > 0
+      ? `<span class="text-[10.5px] text-fg-3"> · vendég: ${eh(r.guests.map((g) => g.name).join(', '))}</span>`
+      : '';
+    return `
+      <li class="px-3 py-2.5 flex items-center gap-3" style="${idx === 0 ? '' : 'border-top:1px solid var(--line);'}">
+        <input type="checkbox" class="acc-email-cb" data-idx="${idx}"
+          ${r.selected ? 'checked' : ''}
+          style="width:16px;height:16px;accent-color:var(--accent);flex:none;" />
+        <div class="flex-1 min-w-0">
+          <p class="text-[12.5px] font-semibold text-fg-1 truncate">${eh(r.systemName)}</p>
+          <p class="text-[10.5px] text-fg-3 truncate">${eh(r.email)}${guestSummary}</p>
+        </div>
+        <div class="text-right flex-none">
+          <p class="text-[12px] font-mono-tnum font-semibold text-fg-1">${eh(formatHuf(r.amount))}</p>
+          <p class="text-[10px] text-fg-3 font-mono-tnum">${r.count} alk.</p>
+        </div>
+      </li>`;
+  }).join('');
+
+  return `
+    <div class="card fade-up overflow-hidden" style="border-radius:20px">
+      <div class="px-4 py-3 flex items-center justify-between gap-2" style="border-bottom:1px solid var(--line)">
+        <div>
+          <p class="eyebrow text-[10px] mb-0.5">📧 Email küldés</p>
+          <p class="text-[13px] font-semibold text-fg-1">${selectedCount} / ${state.emailRecipients.length} tag kijelölve</p>
+        </div>
+        <div class="flex items-center gap-2">
+          <button id="acc-email-all" class="text-[11.5px] font-semibold px-2.5 py-1 rounded-full"
+            style="background:var(--bg-elev);color:var(--fg-2)">Mindet</button>
+          <button id="acc-email-none" class="text-[11.5px] font-semibold px-2.5 py-1 rounded-full"
+            style="background:var(--bg-elev);color:var(--fg-2)">Egyiket sem</button>
+        </div>
+      </div>
+      <ul>${rows}</ul>
+      <div class="px-4 py-3" style="border-top:1px solid var(--line)">
+        <label class="flex items-center gap-2 mb-3 cursor-pointer">
+          <input type="checkbox" id="acc-email-admin"
+            ${state.emailAdminToggle ? 'checked' : ''}
+            style="width:16px;height:16px;accent-color:var(--accent);" />
+          <span class="text-[12px] text-fg-2">📊 Admin összesítő küldése PDF-fel (saját email-edre)</span>
+        </label>
+        <button id="acc-email-send"
+          class="w-full px-4 py-2.5 rounded-full text-white text-[13px] font-semibold transition-colors ${state.emailSending || (selectedCount === 0 && !state.emailAdminToggle) ? 'opacity-60 cursor-not-allowed' : ''}"
+          style="background:var(--accent)"
+          ${state.emailSending || (selectedCount === 0 && !state.emailAdminToggle) ? 'disabled' : ''}>
+          ${state.emailSending ? 'Küldés…' : `📧 Küldés (${selectedCount} fő${state.emailAdminToggle ? ' + admin' : ''})`}
+        </button>
+        ${state.emailResult ? renderEmailResult(state.emailResult) : ''}
+      </div>
+    </div>`;
+}
+
+function renderEmailResult(r: { sent: number; failed: { to: string; reason: string }[]; adminSent: boolean }): string {
+  const failList = r.failed.length > 0
+    ? `<ul class="mt-1 space-y-0.5 text-[10.5px]" style="color:#7f1d1d">
+        ${r.failed.map((f) => `<li>• ${eh(f.to)}: ${eh(f.reason)}</li>`).join('')}
+      </ul>`
+    : '';
+  return `
+    <div class="mt-3 p-2.5 rounded-lg" style="background:${r.failed.length === 0 ? 'rgba(16,185,129,0.10)' : 'rgba(245,158,11,0.10)'};color:${r.failed.length === 0 ? '#047857' : '#92400e'}">
+      <p class="text-[12px] font-semibold">
+        ✅ ${r.sent} email kiküldve${r.adminSent ? ' + admin összesítő' : ''}${r.failed.length > 0 ? ` · ${r.failed.length} sikertelen` : ''}
+      </p>
+      ${failList}
+    </div>`;
+}
+
 function renderBulkSection(state: AccState): string {
   return `
     <div class="card p-4 fade-up" style="border-radius:18px">
@@ -412,6 +577,7 @@ function attachHandlers(container: HTMLElement, state: AccState) {
     state.selectedInvoiceId = invSel.value;
     state.loadedCalc = null;
     state.loadedFromCache = false;
+    state.emailResult = null;
     // Próbáljuk betölteni a mentett elszámolást
     const inv = state.invoices.find((i) => i.id === state.selectedInvoiceId);
     if (inv) {
@@ -421,6 +587,7 @@ function attachHandlers(container: HTMLElement, state: AccState) {
         state.loadedFromCache = true;
       }
     }
+    recomputeEmailRecipients(state);
     rerender(container, state);
   });
 
@@ -447,6 +614,8 @@ function attachHandlers(container: HTMLElement, state: AccState) {
       state.loadedFromCache = false;
       // settlements lista frissítése
       state.settlements = await getAllSettlements();
+      recomputeEmailRecipients(state);
+      state.emailResult = null;
       showToast(state, 'success', `✅ Kalkuláció kész: ${result.year}. ${result.monthName}`);
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
@@ -482,6 +651,103 @@ function attachHandlers(container: HTMLElement, state: AccState) {
       showToast(state, 'error', `❌ PDF hiba: ${msg}`);
     }
     rerender(container, state);
+  });
+
+  // ─── Email checkboxok ───
+  container.querySelectorAll<HTMLInputElement>('.acc-email-cb').forEach((cb) => {
+    cb.addEventListener('change', () => {
+      const idx = Number(cb.dataset.idx);
+      const r = state.emailRecipients[idx];
+      if (r) {
+        r.selected = cb.checked;
+        rerender(container, state);
+      }
+    });
+  });
+  container.querySelector<HTMLButtonElement>('#acc-email-all')?.addEventListener('click', () => {
+    state.emailRecipients.forEach((r) => { r.selected = true; });
+    rerender(container, state);
+  });
+  container.querySelector<HTMLButtonElement>('#acc-email-none')?.addEventListener('click', () => {
+    state.emailRecipients.forEach((r) => { r.selected = false; });
+    rerender(container, state);
+  });
+  container.querySelector<HTMLInputElement>('#acc-email-admin')?.addEventListener('change', (e) => {
+    state.emailAdminToggle = (e.target as HTMLInputElement).checked;
+    rerender(container, state);
+  });
+
+  // ─── Email küldés ───
+  const sendBtn = container.querySelector<HTMLButtonElement>('#acc-email-send');
+  sendBtn?.addEventListener('click', async () => {
+    const c = state.loadedCalc;
+    if (!c) return;
+    const monthName = 'monthName' in c ? c.monthName : '';
+    const selected = state.emailRecipients.filter((r) => r.selected);
+    if (selected.length === 0 && !state.emailAdminToggle) {
+      showToast(state, 'error', 'Nincs kit küldeni.');
+      rerender(container, state);
+      return;
+    }
+
+    state.emailSending = true;
+    state.emailResult = null;
+    rerender(container, state);
+
+    try {
+      // PDF generálás csak akkor, ha admin email is megy
+      let pdfBase64: string | undefined;
+      if (state.emailAdminToggle) {
+        const { generateSettlementPdf } = await import('../lib/pdf');
+        const { blobToBase64 } = await import('../lib/email');
+        const blob = generateSettlementPdf({
+          year: c.year,
+          monthName,
+          perPerson: c.perPerson,
+        });
+        pdfBase64 = await blobToBase64(blob);
+      }
+
+      const { sendBillingEmails } = await import('../lib/email');
+      const auth = getAuthState();
+      const adminEmail = state.emailAdminToggle ? (auth.user?.email ?? '') : undefined;
+
+      const result = await sendBillingEmails({
+        year: c.year,
+        monthName,
+        personal: selected.map((r) => ({
+          to: r.email,
+          name: r.systemName,
+          count: r.count,
+          amount: r.amount,
+          guestDetails: r.guests.length > 0 ? {
+            ownCount: r.ownCount,
+            ownCost: r.ownAmount,
+            guests: r.guests.map((g) => ({ name: g.name, count: g.count, cost: g.amount })),
+          } : undefined,
+        })),
+        adminEmail,
+        adminSummaryRows: state.emailAdminToggle
+          ? c.perPerson.map((p) => ({ name: p.name, count: p.count, amount: p.amount }))
+          : undefined,
+        pdfBase64,
+      });
+
+      state.emailResult = {
+        sent: result.personalSent,
+        failed: result.personalFailed,
+        adminSent: result.adminSent,
+      };
+      const errPart = result.adminError ? ` (admin: ${result.adminError})` : '';
+      showToast(state, result.personalFailed.length === 0 ? 'success' : 'info',
+        `📧 ${result.personalSent}/${result.totalRequested} kiküldve${errPart}`);
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      showToast(state, 'error', `❌ Email küldési hiba: ${msg}`);
+    } finally {
+      state.emailSending = false;
+      rerender(container, state);
+    }
   });
 
   const bulkForce = container.querySelector<HTMLInputElement>('#acc-bulk-force');
