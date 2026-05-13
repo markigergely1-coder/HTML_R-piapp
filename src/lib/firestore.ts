@@ -29,6 +29,7 @@ export const COLLECTIONS = {
   SETTLEMENTS: 'settlements',
   DEVICES: 'device_registrations',
   APP_LOGS: 'app_logs',
+  REVOLUT_MAPPING: 'revolut_name_mapping',
 } as const;
 
 export interface AttendanceRecord {
@@ -444,6 +445,50 @@ function parseNumberLikeFo(v: unknown): number {
     return m ? Number(m[0]) : 0;
   }
   return 0;
+}
+
+// ─────────────────────────────────────────────────────────────────
+// Revolut név-párosítás (revolut_name → system_name)
+// ─────────────────────────────────────────────────────────────────
+
+export interface NameMapping {
+  id: string;
+  revolutName: string;
+  systemName: string;
+}
+
+export async function getAllNameMappings(): Promise<NameMapping[]> {
+  const snap = await getDocs(collection(db, COLLECTIONS.REVOLUT_MAPPING));
+  const list: NameMapping[] = [];
+  snap.forEach((d) => {
+    const data = d.data();
+    list.push({
+      id: d.id,
+      revolutName: (data.revolut_name ?? '').toString(),
+      systemName: (data.system_name ?? '').toString(),
+    });
+  });
+  return list.sort((a, b) => a.systemName.localeCompare(b.systemName, 'hu'));
+}
+
+export async function addNameMapping(revolutName: string, systemName: string): Promise<string> {
+  // Töröljük az adott system_name-hez tartozó korábbi mapping-ot (1:1 kapcsolat)
+  const existing = await getDocs(query(
+    collection(db, COLLECTIONS.REVOLUT_MAPPING),
+    where('system_name', '==', systemName),
+  ));
+  for (const d of existing.docs) {
+    await deleteDoc(doc(db, COLLECTIONS.REVOLUT_MAPPING, d.id));
+  }
+  const ref = await addDoc(collection(db, COLLECTIONS.REVOLUT_MAPPING), {
+    revolut_name: revolutName.trim(),
+    system_name: systemName.trim(),
+  });
+  return ref.id;
+}
+
+export async function deleteNameMapping(id: string): Promise<void> {
+  await deleteDoc(doc(db, COLLECTIONS.REVOLUT_MAPPING, id));
 }
 
 // ─────────────────────────────────────────────────────────────────
