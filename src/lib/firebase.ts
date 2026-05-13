@@ -1,5 +1,9 @@
 import { initializeApp } from 'firebase/app';
-import { getFirestore } from 'firebase/firestore';
+import {
+  initializeFirestore,
+  persistentLocalCache,
+  persistentMultipleTabManager,
+} from 'firebase/firestore';
 import { getAuth, GoogleAuthProvider } from 'firebase/auth';
 
 // Firebase config — public, biztonságos publikálni
@@ -14,6 +18,20 @@ const firebaseConfig = {
 };
 
 export const app = initializeApp(firebaseConfig);
-export const db = getFirestore(app);
+
+/**
+ * Firestore offline persistence (IndexedDB) — minden lekérdezés a helyi
+ * cache-ből szolgálódik ki ha van érvényes adat, párhuzamosan frissül a
+ * háttérben a szerverről. Mobil hálózaton drasztikusan gyorsabb betöltés.
+ *
+ * persistentMultipleTabManager: egyszerre több tab is használhatja
+ * (egyébként csak az első tab tudna persistence-t).
+ */
+export const db = initializeFirestore(app, {
+  localCache: persistentLocalCache({
+    tabManager: persistentMultipleTabManager(),
+  }),
+});
+
 export const auth = getAuth(app);
 export const googleProvider = new GoogleAuthProvider();
