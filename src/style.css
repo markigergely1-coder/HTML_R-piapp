@@ -198,8 +198,12 @@ html, body {
 
 /* ─── Vendég stepper — elegáns iOS-style ───────────────── */
 
-/* Idle: szinte láthatatlan, csak finom border */
+/* Lokális kék paletta a stepper-hez (független a global --accent-től). */
 .admin-guest-stepper {
+  /* sky-500 / sky-700 — Tailwind paletta, harmonizál a többi UI-jal */
+  --stepper-tone: #0ea5e9;
+  --stepper-ink:  #0369a1;
+
   display: inline-flex;
   align-items: center;
   gap: 0;
@@ -211,13 +215,13 @@ html, body {
   transition: background 220ms ease, border-color 220ms ease, box-shadow 220ms ease, transform 180ms ease;
 }
 
-/* Active state (count > 0): warm tint, soft glow ring */
+/* Active state (count > 0): kék tint, soft glow ring */
 .admin-guest-stepper.is-active {
-  background: color-mix(in oklab, var(--accent) 8%, var(--bg-card));
-  border-color: color-mix(in oklab, var(--accent) 50%, transparent);
+  background: color-mix(in oklab, var(--stepper-tone) 8%, var(--bg-card));
+  border-color: color-mix(in oklab, var(--stepper-tone) 50%, transparent);
   box-shadow:
     inset 0 1px 0 rgba(255, 255, 255, 0.6),
-    0 0 0 4px color-mix(in oklab, var(--accent) 10%, transparent);
+    0 0 0 4px color-mix(in oklab, var(--stepper-tone) 12%, transparent);
 }
 
 /* Number display in middle */
@@ -234,7 +238,7 @@ html, body {
   padding: 0 2px;
 }
 .admin-guest-stepper.is-active .stepper-num {
-  color: var(--accent-ink);
+  color: var(--stepper-ink);
 }
 
 /* Stepper button — pill-style, finom shadow */
@@ -260,16 +264,16 @@ html, body {
   display: block;
 }
 
-/* Active variant: button takes accent tint */
+/* Active variant: kék ink szín */
 .admin-guest-stepper.is-active .stepper-btn {
   background: var(--bg-card);
-  color: var(--accent-ink);
+  color: var(--stepper-ink);
 }
 
 /* Hover */
 .admin-guest-stepper .stepper-btn:hover:not(.is-disabled) {
-  background: color-mix(in oklab, var(--accent) 14%, var(--bg-card));
-  color: var(--accent-ink);
+  background: color-mix(in oklab, var(--stepper-tone) 14%, var(--bg-card));
+  color: var(--stepper-ink);
   box-shadow:
     0 2px 6px rgba(0, 0, 0, 0.10),
     inset 0 -1px 0 rgba(0, 0, 0, 0.04);

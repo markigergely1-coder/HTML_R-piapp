@@ -169,11 +169,11 @@ function renderStep1(state: AdminState): string {
     <div class="grid grid-cols-2 gap-2 fade-up">
       <div class="card p-3.5">
         <p class="eyebrow text-[10px] mb-1">Jelen</p>
-        <p class="font-mono-tnum font-semibold text-[24px] leading-none text-fg-1 num-display">${presentCount}</p>
+        <p id="admin-stat-present" class="font-mono-tnum font-semibold text-[24px] leading-none text-fg-1 num-display">${presentCount}</p>
       </div>
       <div class="card p-3.5">
         <p class="eyebrow text-[10px] mb-1">Vendégek</p>
-        <p class="font-mono-tnum font-semibold text-[24px] leading-none text-fg-1 num-display">${totalGuestCount}</p>
+        <p id="admin-stat-guests" class="font-mono-tnum font-semibold text-[24px] leading-none text-fg-1 num-display">${totalGuestCount}</p>
       </div>
     </div>
 
@@ -390,12 +390,68 @@ function rerender(container: HTMLElement, state: AdminState) {
   }
 }
 
+/**
+ * In-place stats bar + "Tovább" gomb állapotának frissítése.
+ * Sokkal kevésbé zavaró mint a teljes oldal-rerender minden stepper-kattintáskor.
+ */
+function updateStatsAndNext(container: HTMLElement, state: AdminState) {
+  const presentEntries = [...state.entries.values()].filter((e) => e.present);
+  const presentCount = presentEntries.length;
+  const totalGuestCount = presentEntries.reduce((s, e) => s + e.guestCount, 0);
+
+  const presentEl = container.querySelector<HTMLElement>('#admin-stat-present');
+  const guestsEl = container.querySelector<HTMLElement>('#admin-stat-guests');
+  if (presentEl) presentEl.textContent = String(presentCount);
+  if (guestsEl) guestsEl.textContent = String(totalGuestCount);
+
+  const nextBtn = container.querySelector<HTMLButtonElement>('#admin-next-1');
+  if (nextBtn) {
+    const disabled = presentCount === 0;
+    nextBtn.disabled = disabled;
+    nextBtn.classList.toggle('opacity-50', disabled);
+    nextBtn.classList.toggle('cursor-not-allowed', disabled);
+  }
+}
+
 function attachHandlers(container: HTMLElement, state: AdminState) {
   // Step 1
   const dateSel = container.querySelector<HTMLSelectElement>('#admin-date-select');
   dateSel?.addEventListener('change', () => {
     state.date = dateSel.value;
   });
+
+  // In-place stepper csere: csak az adott row stepper-jét cseréli + handler re-bind
+  const replaceStepperInRow = (li: HTMLElement, entry: AdminEntry) => {
+    const old = li.querySelector<HTMLElement>('.admin-guest-stepper');
+    if (!old) return;
+    const tmp = document.createElement('div');
+    tmp.innerHTML = renderGuestStepper(entry.guestCount, entry.present);
+    const fresh = tmp.firstElementChild as HTMLElement | null;
+    if (!fresh) return;
+    old.replaceWith(fresh);
+    bindStepperButtons(li, entry);
+  };
+
+  // Egy adott sor stepper-gombjaihoz hozzáköti az event handlereket
+  const bindStepperButtons = (li: HTMLElement, entry: AdminEntry) => {
+    const applyGuestCount = (next: number) => {
+      const clamped = Math.max(0, Math.min(MAX_GUESTS, next));
+      if (clamped === entry.guestCount) return;
+      entry.guestCount = clamped;
+      while (entry.guestNames.length < entry.guestCount) entry.guestNames.push('');
+      entry.guestNames.length = entry.guestCount;
+      replaceStepperInRow(li, entry);
+      updateStatsAndNext(container, state);
+    };
+    li.querySelector<HTMLButtonElement>('.admin-guest-dec')?.addEventListener('click', () => {
+      if (!entry.present) return;
+      applyGuestCount(entry.guestCount - 1);
+    });
+    li.querySelector<HTMLButtonElement>('.admin-guest-inc')?.addEventListener('click', () => {
+      if (!entry.present) return;
+      applyGuestCount(entry.guestCount + 1);
+    });
+  };
 
   container.querySelectorAll<HTMLLIElement>('[data-name]').forEach((li) => {
     const name = li.dataset.name!;
@@ -407,25 +463,11 @@ function attachHandlers(container: HTMLElement, state: AdminState) {
         entry.guestCount = 0;
         entry.guestNames = [];
       }
-      rerender(container, state);
+      // In-place: csak a stepper és a stat sáv frissül, nincs flash
+      replaceStepperInRow(li, entry);
+      updateStatsAndNext(container, state);
     });
-    const applyGuestCount = (next: number) => {
-      const clamped = Math.max(0, Math.min(MAX_GUESTS, next));
-      if (clamped === entry.guestCount) return;
-      entry.guestCount = clamped;
-      // Tartsuk meg a már beírt neveket
-      while (entry.guestNames.length < entry.guestCount) entry.guestNames.push('');
-      entry.guestNames.length = entry.guestCount;
-      rerender(container, state);
-    };
-    li.querySelector<HTMLButtonElement>('.admin-guest-dec')?.addEventListener('click', () => {
-      if (!entry.present) return;
-      applyGuestCount(entry.guestCount - 1);
-    });
-    li.querySelector<HTMLButtonElement>('.admin-guest-inc')?.addEventListener('click', () => {
-      if (!entry.present) return;
-      applyGuestCount(entry.guestCount + 1);
-    });
+    bindStepperButtons(li, entry);
   });
 
   container.querySelector<HTMLButtonElement>('#admin-next-1')?.addEventListener('click', () => {
