@@ -14,7 +14,6 @@
 import {
   onAuthStateChanged,
   signInWithRedirect,
-  signInWithPopup,
   getRedirectResult,
   signOut as fbSignOut,
   type User,
@@ -64,28 +63,17 @@ export function onAuthChange(cb: (state: AuthState) => void): () => void {
 }
 
 /**
- * Megpróbál popup-tal belépni (gyorsabb UX), és ha az nem megy
- * (popup blokk, COOP, cookie probléma), átesik redirect-re.
+ * Google bejelentkezés redirect módon.
+ *
+ * A popup mód (signInWithPopup) hosztolt környezetben (pl. Vercel) megbízhatatlan:
+ * a popup `firebaseapp.com` origin-re nyílik, és a böngészők third-party cookie
+ * blokkolása miatt a popup nem tud visszaüzenni — felvillan, bezáródik, semmi.
+ *
+ * A redirect ezt megkerüli: az egész oldal navigál Google-re, majd vissza,
+ * és a getRedirectResult() modulbetöltéskor felveszi az eredményt.
  */
 export async function signIn(): Promise<void> {
-  try {
-    await signInWithPopup(auth, googleProvider);
-  } catch (err) {
-    const code = (err as { code?: string })?.code ?? '';
-    console.warn('[auth] popup failed, falling back to redirect:', code, err);
-
-    // Ezekre a hibákra biztosan redirect kell:
-    //  - popup-blocked
-    //  - popup-closed-by-user
-    //  - cancelled-popup-request
-    //  - operation-not-supported-in-this-environment
-    //  - web-storage-unsupported
-    //  - account-exists-with-different-credential (ez ritka)
-    //
-    // De minden esetben próbáljunk redirect-re átállni; ha a user szándékosan
-    // zárta be a popup-ot, a redirect csak újra elindítja a folyamatot.
-    await signInWithRedirect(auth, googleProvider);
-  }
+  await signInWithRedirect(auth, googleProvider);
 }
 
 export async function signOut(): Promise<void> {
