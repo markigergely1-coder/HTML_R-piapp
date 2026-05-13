@@ -17,20 +17,10 @@ import {
 import {
   getAttendeesByDates,
   getCancelledSessions,
-  getAllAttendanceRecords,
-  getAllMembers,
   type CancelledSession,
 } from '../lib/firestore';
 import { getInitials } from '../lib/avatar';
 import { renderHeader } from '../components/header';
-
-/** Egy játékos összesített statisztikái a hover tooltip-hez. */
-interface PlayerStats {
-  totalSessions: number;       // Összes igazolt részvétel (Yes - No)
-  firstDate: string | null;    // Első részvétel dátuma
-  lastDate: string | null;     // Legutóbbi részvétel dátuma
-  email: string | null;        // Email a members kollekcióból
-}
 
 interface OverviewState {
   dates: string[];
@@ -38,7 +28,6 @@ interface OverviewState {
   selected: string;
   attendeesByDate: Map<string, string[]>;
   cancelled: Map<string, CancelledSession>;
-  playerStats: Map<string, PlayerStats>;
 }
 
 // ─── Belépési pont ───
@@ -46,17 +35,11 @@ export async function renderOverviewPage(container: HTMLElement): Promise<void> 
   container.innerHTML = renderLoadingShell();
 
   const dates = generateTuesdayDates(8, 1);
-  const [attendeesByDate, cancelled, allRecords, members] = await Promise.all([
+  const [attendeesByDate, cancelled] = await Promise.all([
     getAttendeesByDates(dates),
     getCancelledSessions(),
-    getAllAttendanceRecords(),
-    // Members optional — ha permission-denied vagy más hiba, üres lista
-    getAllMembers().catch(() => []),
   ]);
   const upcoming = upcomingTuesday(dates);
-
-  // Statisztikák összesítése: ki hány alkalmon volt + első/utolsó dátum
-  const playerStats = computePlayerStats(allRecords, members);
 
   const state: OverviewState = {
     dates,
@@ -64,53 +47,10 @@ export async function renderOverviewPage(container: HTMLElement): Promise<void> 
     selected: upcoming,
     attendeesByDate,
     cancelled,
-    playerStats,
   };
 
   container.innerHTML = renderShell(state);
   attachHandlers(container, state);
-}
-
-function computePlayerStats(
-  records: { name: string; status: string; event_date: string }[],
-  members: { name: string; email: string }[],
-): Map<string, PlayerStats> {
-  const yesByPlayer = new Map<string, Set<string>>();
-  const noByPlayer = new Map<string, Set<string>>();
-
-  for (const r of records) {
-    const n = r.name?.trim();
-    if (!n || !r.event_date) continue;
-    if (r.status === 'Yes') {
-      if (!yesByPlayer.has(n)) yesByPlayer.set(n, new Set());
-      yesByPlayer.get(n)!.add(r.event_date);
-    } else if (r.status === 'No') {
-      if (!noByPlayer.has(n)) noByPlayer.set(n, new Set());
-      noByPlayer.get(n)!.add(r.event_date);
-    }
-  }
-
-  // Email lookup (case-insensitive név alapján)
-  const emailByName = new Map<string, string>();
-  for (const m of members) {
-    const n = m.name?.trim().toLowerCase();
-    if (n && m.email) emailByName.set(n, m.email);
-  }
-
-  const result = new Map<string, PlayerStats>();
-  const allNames = new Set([...yesByPlayer.keys(), ...noByPlayer.keys()]);
-  for (const name of allNames) {
-    const yesSet = yesByPlayer.get(name) ?? new Set();
-    const noSet = noByPlayer.get(name) ?? new Set();
-    const confirmed = [...yesSet].filter((d) => !noSet.has(d)).sort();
-    result.set(name, {
-      totalSessions: confirmed.length,
-      firstDate: confirmed[0] ?? null,
-      lastDate: confirmed[confirmed.length - 1] ?? null,
-      email: emailByName.get(name.toLowerCase()) ?? null,
-    });
-  }
-  return result;
 }
 
 // ─── Loading ───
@@ -129,7 +69,7 @@ function renderLoadingShell(): string {
 }
 
 // ─── Shell ───
-// Mobile (< lg): hero → scroller → résztvevők → teaser (stacked)
+// Mobile (< lg): hero → scroller → résztvevők (stacked)
 // Desktop (lg+): 3-col grid — hero (sticky) | résztvevők | dátum-lista (sticky)
 function renderShell(state: OverviewState): string {
   return `
@@ -140,15 +80,14 @@ function renderShell(state: OverviewState): string {
         <div id="hero-wrapper" class="lg:sticky lg:top-[110px]">
           ${renderHero(state)}
         </div>
-        <!-- Középső oszlop: scroller (csak mobil) + Résztvevők + Teaser -->
+        <!-- Középső oszlop: scroller (csak mobil) + Résztvevők -->
         <div class="lg:min-w-0">
           <div class="lg:hidden">
             ${renderDateScroller(state)}
           </div>
-          <div id="result-main" class="px-5 pt-3 lg:px-0 lg:pt-0">
+          <div id="result-main" class="px-5 pt-3 pb-10 lg:px-0 lg:pt-0 lg:pb-2">
             ${renderResult(state)}
           </div>
-          ${renderUpcomingTeaser()}
         </div>
         <!-- Jobb oszlop: Dátum-lista (csak desktop, sticky) -->
         <div class="hidden lg:block lg:sticky lg:top-[110px]">
@@ -165,6 +104,7 @@ function renderHero(state: OverviewState): string {
   const attendees = state.attendeesByDate.get(date) ?? [];
   const count = isCancelled ? 0 : attendees.length;
   const idealMin = 8;
+  const isPast = isDateInPast(date);
   const isReady = count >= idealMin;
 
   // Dátum parse
@@ -184,28 +124,30 @@ function renderHero(state: OverviewState): string {
       ? `<span class="text-[11px] font-semibold px-2 py-0.5 rounded-full" style="background:color-mix(in oklab,var(--accent) 14%,transparent);color:var(--accent-ink)">${relLabel}</span>`
       : '';
 
+  // Státusz szöveg: múltbéli alkalomnál "Volt játék" / "Nem volt játék",
+  // jövőbenire "Lesz edzés ✓" vagy "Még X fő kell"
+  let statusText: string;
+  if (isPast) {
+    statusText = count > 0 ? 'Volt játék' : 'Nem volt játék';
+  } else {
+    statusText = isReady ? 'Lesz edzés ✓' : `Még ${idealMin - count} fő kell`;
+  }
+  const statusIsGood = isPast ? count > 0 : isReady;
+
   const countSection = isCancelled
     ? `<div class="mt-4">
         <p class="text-[14px] font-semibold text-fg-1">Elmarad</p>
         <p class="text-[12px] text-fg-2 mt-0.5">${eh(state.cancelled.get(date)?.reason ?? '')}</p>
        </div>`
-    : `<div class="mt-4 flex items-center justify-between">
-        <div class="flex items-center gap-3">
-          <div class="w-12 h-12 rounded-full flex items-center justify-center"
-               style="background:${isReady ? 'color-mix(in oklab,#10b981 16%,transparent)' : 'color-mix(in oklab,var(--accent) 14%,transparent)'};border:1px solid color-mix(in oklab,currentColor 20%,transparent);color:${isReady ? '#047857' : 'var(--accent-ink)'}">
-            <span class="font-mono-tnum font-bold text-[18px] num-display">${count}</span>
-          </div>
-          <div>
-            <p class="text-[14px] font-semibold text-fg-1">${count} fő jelentkezett</p>
-            <p class="text-[12px] text-fg-2">${isReady ? 'Lesz edzés ✓' : `Még ${idealMin - count} fő kell`}</p>
-          </div>
+    : `<div class="mt-4 flex items-center gap-3">
+        <div class="w-12 h-12 rounded-full flex items-center justify-center flex-shrink-0"
+             style="background:${statusIsGood ? 'color-mix(in oklab,#10b981 16%,transparent)' : 'color-mix(in oklab,var(--accent) 14%,transparent)'};border:1px solid color-mix(in oklab,currentColor 20%,transparent);color:${statusIsGood ? '#047857' : 'var(--accent-ink)'}">
+          <span class="font-mono-tnum font-bold text-[18px] num-display">${count}</span>
         </div>
-        <button id="btn-jelentkezes"
-          class="px-3.5 py-2 rounded-full text-[12px] font-semibold text-white shadow-sm cursor-not-allowed opacity-60"
-          title="Hamarosan elérhető"
-          style="background:var(--accent)">
-          Jelentkezés
-        </button>
+        <div class="min-w-0">
+          <p class="text-[14px] font-semibold text-fg-1">${count} fő ${isPast ? 'volt jelen' : 'jelentkezett'}</p>
+          <p class="text-[12px] text-fg-2">${statusText}</p>
+        </div>
        </div>`;
 
   return `
@@ -371,41 +313,25 @@ function renderResult(state: OverviewState): string {
   }
   const attendees = state.attendeesByDate.get(state.selected) ?? [];
   if (attendees.length === 0) return renderEmptyCard(state.selected);
-  return renderAttendeesSection(attendees, state.playerStats);
+  return renderAttendeesSection(attendees);
 }
 
-function renderAttendeesSection(attendees: string[], stats: Map<string, PlayerStats>): string {
+function renderAttendeesSection(attendees: string[]): string {
   const cards = attendees.map((name) => {
     const hue = avatarHue(name);
     const initials = getInitials(name);
     const profileHref = `#/profile?name=${encodeURIComponent(name)}`;
-    const s = stats.get(name);
-
-    // Tooltip tartalom — text formátum a hover felugró négyzethez
-    const tooltipLines: string[] = [];
-    if (s) {
-      tooltipLines.push(`Összes alkalom: ${s.totalSessions}`);
-      if (s.firstDate) tooltipLines.push(`Első: ${s.firstDate}`);
-      if (s.lastDate)  tooltipLines.push(`Legutóbbi: ${s.lastDate}`);
-      if (s.email)     tooltipLines.push(s.email);
-    }
-    const tooltipDataset = tooltipLines.length > 0
-      ? ` data-tooltip="${ea(tooltipLines.join('\n'))}"`
-      : '';
 
     return `
-      <a href="${profileHref}"${tooltipDataset}
+      <a href="${profileHref}"
+         data-tooltip="→ Lépés ${ea(name)} profiljára"
          class="attendee-card card flex items-center gap-2.5 px-3 py-2.5 lift no-underline transition-colors hover:bg-[color:var(--bg-elev)]"
-         style="border-radius:16px;color:inherit;text-decoration:none"
-         title="${ea(name)} profilja">
+         style="border-radius:16px;color:inherit;text-decoration:none">
         <div class="rounded-full flex items-center justify-center flex-shrink-0 font-semibold text-[10px]"
              style="width:28px;height:28px;flex-shrink:0;background:linear-gradient(135deg,hsl(${hue} 80% 88%) 0%,hsl(${(hue+30)%360} 75% 78%) 100%);color:hsl(${hue} 60% 30%)">
           ${eh(initials)}
         </div>
-        <span class="text-[12.5px] font-medium text-fg-1 truncate">${eh(name)}</span>
-        ${s && s.totalSessions > 0
-          ? `<span class="ml-auto text-[10px] font-mono-tnum text-fg-3 flex-none">${s.totalSessions}×</span>`
-          : ''}
+        <span class="text-[12.5px] font-medium text-fg-1 break-words leading-tight">${eh(name)}</span>
       </a>`;
   }).join('');
 
@@ -433,6 +359,7 @@ function ea(s: string): string {
 }
 
 function renderEmptyCard(date: string): string {
+  const past = isDateInPast(date);
   return `
     <div class="fade-up">
       <div class="card-soft p-8 text-center" style="border-radius:22px">
@@ -442,17 +369,8 @@ function renderEmptyCard(date: string): string {
             <circle cx="12" cy="12" r="9"/><path d="M3 12c4.5-1.5 13.5-1.5 18 0M12 3c-2.5 4.5-2.5 13.5 0 18M12 3c2.5 4.5 2.5 13.5 0 18"/>
           </svg>
         </div>
-        <p class="text-[15px] font-semibold text-fg-1">Még nincs jelentkező</p>
-        <p class="text-[12px] text-fg-2 mt-1 max-w-[280px] mx-auto">
-          Légy az első, aki jelzi a részvételét erre az alkalomra!
-        </p>
-        <p class="text-[12px] text-fg-3 mt-0.5">${eh(formatDateHuLong(date))}</p>
-        <button id="btn-jelentkezes-empty"
-          class="mt-4 px-4 py-2 rounded-full text-[13px] font-semibold text-white cursor-not-allowed opacity-60"
-          title="Hamarosan elérhető"
-          style="background:var(--accent)">
-          Jelentkezem
-        </button>
+        <p class="text-[15px] font-semibold text-fg-1">${past ? 'Nem volt játék' : 'Még nincs jelentkező'}</p>
+        <p class="text-[12px] text-fg-3 mt-1">${eh(formatDateHuLong(date))}</p>
       </div>
     </div>`;
 }
@@ -476,29 +394,6 @@ function renderCancelledCard(date: string, info?: CancelledSession): string {
         </div>
       </div>
     </div>`;
-}
-
-// ─── Upcoming teaser strip ───
-function renderUpcomingTeaser(): string {
-  return `
-    <section class="px-5 pt-5 pb-10 lg:px-0 lg:pt-5 lg:pb-2">
-      <div class="card-soft px-4 py-3 flex items-center gap-3" style="border-radius:18px">
-        <div class="w-8 h-8 rounded-full flex items-center justify-center"
-             style="background:color-mix(in oklab,var(--accent) 14%,transparent)">
-          <span class="text-[13px]">📅</span>
-        </div>
-        <div class="flex-1 min-w-0">
-          <p class="text-[12.5px] font-medium text-fg-1">Heti emlékeztető</p>
-          <p class="text-[11px] text-fg-3">Minden kedden, 19:00 — Sportcsarnok B terem</p>
-        </div>
-        <button id="btn-reszletek"
-          class="text-[12px] font-semibold cursor-not-allowed opacity-60"
-          title="Hamarosan elérhető"
-          style="color:var(--accent)">
-          Részletek →
-        </button>
-      </div>
-    </section>`;
 }
 
 // ─── Volleyball art SVG ───
@@ -591,6 +486,16 @@ function avatarHue(name: string): number {
   let h = 0;
   for (const c of name) h = (h * 31 + c.charCodeAt(0)) & 0xffffffff;
   return Math.abs(h) % 360;
+}
+
+/** Múltbéli-e az adott YYYY-MM-DD dátum (a mai naphoz képest, lokális idő szerint)? */
+function isDateInPast(iso: string): boolean {
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+  const [y, m, d] = iso.split('-').map(Number);
+  const target = new Date(y, m - 1, d);
+  target.setHours(0, 0, 0, 0);
+  return target.getTime() < today.getTime();
 }
 
 function eh(s: string): string {
