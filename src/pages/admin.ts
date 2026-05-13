@@ -179,8 +179,9 @@ function renderStep1(state: AdminState): string {
 
     <!-- Tagok listája -->
     <div class="card overflow-hidden fade-up" style="border-radius:22px">
-      <div class="px-4 py-3" style="border-bottom:1px solid var(--line)">
+      <div class="px-4 py-3 flex items-center justify-between" style="border-bottom:1px solid var(--line)">
         <span class="eyebrow">Tagok</span>
+        <span class="eyebrow">Plusz ember</span>
       </div>
       <ul>${rows}</ul>
     </div>
@@ -196,51 +197,35 @@ function renderStep1(state: AdminState): string {
     </div>`;
 }
 
-// ─── Vendég stepper (Apple-style +/- számváltó) ───
+// ─── Vendég stepper — elegáns iOS-style ───
 function renderGuestStepper(count: number, enabled: boolean): string {
   const hasGuests = count > 0;
   const atMin = count <= 0;
   const atMax = count >= MAX_GUESTS;
 
-  // Outer container — pill-style, kontrasztos amikor van vendég
-  const containerBg = hasGuests
-    ? 'color-mix(in oklab,var(--accent) 12%,transparent)'
-    : 'var(--bg-elev)';
-  const containerBorder = hasGuests ? 'var(--accent)' : 'var(--line)';
-  const enabledStyle = enabled ? '' : 'opacity:0.4;pointer-events:none;';
+  // Egész elem disabled (ha a tag nincs jelen)
+  const enabledStyle = enabled ? '' : 'opacity:0.35;pointer-events:none;filter:saturate(0);';
 
-  // Number tone
-  const numColor = hasGuests ? 'var(--accent-ink)' : 'var(--fg-3)';
-
-  // Button base style
-  const btnBase = (disabled: boolean) => `
-    width:30px;height:30px;display:flex;align-items:center;justify-content:center;
-    border-radius:9999px;flex:none;
-    background:transparent;color:${disabled ? 'var(--fg-3)' : (hasGuests ? 'var(--accent-ink)' : 'var(--fg-2)')};
-    transition:background 0.15s ease, transform 0.1s ease, color 0.15s ease;
-    cursor:${disabled ? 'not-allowed' : 'pointer'};
-    opacity:${disabled ? '0.35' : '1'};
-  `.replace(/\s+/g, ' ');
+  // Active variant: warm accent színek, soft glow ring
+  // Idle variant: ultra-szubtilis, szinte láthatatlan
+  const isActive = hasGuests;
+  const stepperClass = isActive ? 'is-active' : '';
 
   return `
-    <div class="admin-guest-stepper inline-flex items-center select-none"
-      style="border:1px solid ${containerBorder};border-radius:9999px;padding:2px;background:${containerBg};${enabledStyle}">
-      <button type="button" class="admin-guest-dec" aria-label="Vendég csökkentés"
-        style="${btnBase(atMin)}"
-        ${atMin ? 'disabled' : ''}>
-        <svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round">
-          <path d="M3 7h8"/>
+    <div class="admin-guest-stepper ${stepperClass} inline-flex items-center select-none"
+      style="${enabledStyle}"
+      data-count="${count}">
+      <button type="button" class="admin-guest-dec stepper-btn ${atMin ? 'is-disabled' : ''}"
+        aria-label="Vendég csökkentés" ${atMin ? 'disabled' : ''}>
+        <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M4 8h8"/>
         </svg>
       </button>
-      <div class="font-mono-tnum font-semibold text-[13.5px] num-display"
-        style="min-width:34px;text-align:center;color:${numColor};transition:color 0.15s ease;">
-        +${count}
-      </div>
-      <button type="button" class="admin-guest-inc" aria-label="Vendég növelés"
-        style="${btnBase(atMax)}"
-        ${atMax ? 'disabled' : ''}>
-        <svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round">
-          <path d="M3 7h8M7 3v8"/>
+      <div class="stepper-num font-mono-tnum num-display">${count}</div>
+      <button type="button" class="admin-guest-inc stepper-btn ${atMax ? 'is-disabled' : ''}"
+        aria-label="Vendég növelés" ${atMax ? 'disabled' : ''}>
+        <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M4 8h8M8 4v8"/>
         </svg>
       </button>
     </div>`;
