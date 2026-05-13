@@ -7,7 +7,9 @@
  */
 
 import { renderHeader } from '../components/header';
-import { MAIN_NAME_LIST, GUEST_COUNT_OPTIONS } from '../lib/config';
+import { MAIN_NAME_LIST } from '../lib/config';
+
+const MAX_GUESTS = 10;
 import {
   generateTuesdayDates,
   upcomingTuesday,
@@ -147,11 +149,7 @@ function renderStep1(state: AdminState): string {
           </div>
           <span class="text-[13px] font-medium text-fg-1 truncate">${eh(name)}</span>
         </label>
-        <select class="admin-guests select-native rounded-[10px] border px-2 py-1 text-[12px] focus:outline-none ${checked ? '' : 'opacity-50'}"
-          style="border-color:var(--line-strong);background:var(--bg-card);min-width:64px"
-          ${checked ? '' : 'disabled'}>
-          ${GUEST_COUNT_OPTIONS.map((g) => `<option value="${g}" ${String(entry.guestCount) === g ? 'selected' : ''}>+${g}</option>`).join('')}
-        </select>
+        ${renderGuestStepper(entry.guestCount, checked)}
       </li>`;
   }).join('');
 
@@ -194,6 +192,56 @@ function renderStep1(state: AdminState): string {
         style="background:var(--accent)"
         ${presentCount === 0 ? 'disabled' : ''}>
         Tovább →
+      </button>
+    </div>`;
+}
+
+// ─── Vendég stepper (Apple-style +/- számváltó) ───
+function renderGuestStepper(count: number, enabled: boolean): string {
+  const hasGuests = count > 0;
+  const atMin = count <= 0;
+  const atMax = count >= MAX_GUESTS;
+
+  // Outer container — pill-style, kontrasztos amikor van vendég
+  const containerBg = hasGuests
+    ? 'color-mix(in oklab,var(--accent) 12%,transparent)'
+    : 'var(--bg-elev)';
+  const containerBorder = hasGuests ? 'var(--accent)' : 'var(--line)';
+  const enabledStyle = enabled ? '' : 'opacity:0.4;pointer-events:none;';
+
+  // Number tone
+  const numColor = hasGuests ? 'var(--accent-ink)' : 'var(--fg-3)';
+
+  // Button base style
+  const btnBase = (disabled: boolean) => `
+    width:30px;height:30px;display:flex;align-items:center;justify-content:center;
+    border-radius:9999px;flex:none;
+    background:transparent;color:${disabled ? 'var(--fg-3)' : (hasGuests ? 'var(--accent-ink)' : 'var(--fg-2)')};
+    transition:background 0.15s ease, transform 0.1s ease, color 0.15s ease;
+    cursor:${disabled ? 'not-allowed' : 'pointer'};
+    opacity:${disabled ? '0.35' : '1'};
+  `.replace(/\s+/g, ' ');
+
+  return `
+    <div class="admin-guest-stepper inline-flex items-center select-none"
+      style="border:1px solid ${containerBorder};border-radius:9999px;padding:2px;background:${containerBg};${enabledStyle}">
+      <button type="button" class="admin-guest-dec" aria-label="Vendég csökkentés"
+        style="${btnBase(atMin)}"
+        ${atMin ? 'disabled' : ''}>
+        <svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round">
+          <path d="M3 7h8"/>
+        </svg>
+      </button>
+      <div class="font-mono-tnum font-semibold text-[13.5px] num-display"
+        style="min-width:34px;text-align:center;color:${numColor};transition:color 0.15s ease;">
+        +${count}
+      </div>
+      <button type="button" class="admin-guest-inc" aria-label="Vendég növelés"
+        style="${btnBase(atMax)}"
+        ${atMax ? 'disabled' : ''}>
+        <svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round">
+          <path d="M3 7h8M7 3v8"/>
+        </svg>
       </button>
     </div>`;
 }
@@ -376,14 +424,22 @@ function attachHandlers(container: HTMLElement, state: AdminState) {
       }
       rerender(container, state);
     });
-    li.querySelector<HTMLSelectElement>('.admin-guests')?.addEventListener('change', (e) => {
-      const n = Number((e.target as HTMLSelectElement).value);
-      entry.guestCount = isFinite(n) ? n : 0;
+    const applyGuestCount = (next: number) => {
+      const clamped = Math.max(0, Math.min(MAX_GUESTS, next));
+      if (clamped === entry.guestCount) return;
+      entry.guestCount = clamped;
       // Tartsuk meg a már beírt neveket
       while (entry.guestNames.length < entry.guestCount) entry.guestNames.push('');
       entry.guestNames.length = entry.guestCount;
-      // Csak a stat-ot kell frissíteni, de a teljes re-render egyszerűbb
       rerender(container, state);
+    };
+    li.querySelector<HTMLButtonElement>('.admin-guest-dec')?.addEventListener('click', () => {
+      if (!entry.present) return;
+      applyGuestCount(entry.guestCount - 1);
+    });
+    li.querySelector<HTMLButtonElement>('.admin-guest-inc')?.addEventListener('click', () => {
+      if (!entry.present) return;
+      applyGuestCount(entry.guestCount + 1);
     });
   });
 

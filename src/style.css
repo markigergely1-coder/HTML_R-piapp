@@ -196,6 +196,22 @@ html, body {
 }
 .fade-up { animation: fadeUp 560ms cubic-bezier(0.22, 1, 0.36, 1) both; }
 
+/* ─── Stepper számcsere pop ─── */
+@keyframes numPop {
+  0%   { transform: scale(0.85); opacity: 0.6; }
+  60%  { transform: scale(1.08); opacity: 1; }
+  100% { transform: scale(1); opacity: 1; }
+}
+.admin-guest-stepper .num-display { animation: numPop 280ms cubic-bezier(0.22, 1, 0.36, 1); }
+
+/* Stepper gomb hover/press hatások — pure CSS, JS-trickel nem fél */
+.admin-guest-stepper button:not(:disabled):hover {
+  background: color-mix(in oklab, currentColor 12%, transparent);
+}
+.admin-guest-stepper button:not(:disabled):active {
+  transform: scale(0.92);
+}
+
 /* ─── Noise overlay a premium kártyákon ─── */
 .noise::before {
   content: '';
