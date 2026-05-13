@@ -62,6 +62,44 @@ export function upcomingTuesday(dates: string[]): string {
   return dates[dates.length - 1];
 }
 
+/** Aktuális óra (0-23) Magyarországi idő szerint. */
+export function currentHourInHungary(): number {
+  const fmt = new Intl.DateTimeFormat('en-US', {
+    timeZone: HUNGARY_TZ,
+    hour: 'numeric',
+    hour12: false,
+  });
+  return Number(fmt.format(new Date()));
+}
+
+/**
+ * Múltbeli (és esetleg mai) keddek listája az Alkalmak oldalhoz.
+ *
+ * A "legutóbbi" kedd:
+ *  - Ha ma kedd ÉS >= 21:00 magyar idő szerint → ma (a már lejátszott este)
+ *  - Egyébként → az előző kedd
+ *
+ * A visszatérés `count` darab kedd, kronológikus sorrendben (legrégebbi → legújabb).
+ */
+export function pastTuesdaysForDisplay(count = 9): string[] {
+  const today = todayInHungary();
+  const todayWeekday = weekdayOf(today);
+  const hour = currentHourInHungary();
+
+  const daysSinceTuesday = (todayWeekday - 2 + 7) % 7;
+  let mostRecent = addDays(today, -daysSinceTuesday); // = today ha ma kedd
+  // Ha ma kedd, de 21:00 előtt → még nem "lejátszott", visszalépünk az előző keddre
+  if (todayWeekday === 2 && hour < 21) {
+    mostRecent = addDays(mostRecent, -7);
+  }
+
+  const result: string[] = [];
+  for (let i = count - 1; i >= 0; i--) {
+    result.push(addDays(mostRecent, -7 * i));
+  }
+  return result;
+}
+
 /** Magyar formátum: "2026. máj. 11." */
 export function formatDateHu(dateStr: string): string {
   const d = new Date(dateStr + 'T12:00:00Z');

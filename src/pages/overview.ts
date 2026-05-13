@@ -8,8 +8,7 @@
  */
 
 import {
-  generateTuesdayDates,
-  upcomingTuesday,
+  pastTuesdaysForDisplay,
   formatMonthShortHu,
   dayOf,
   formatDateHuLong,
@@ -34,17 +33,19 @@ interface OverviewState {
 export async function renderOverviewPage(container: HTMLElement): Promise<void> {
   container.innerHTML = renderLoadingShell();
 
-  const dates = generateTuesdayDates(8, 1);
+  // Csak múltbeli (és kedd 21:00 után aznapi) alkalmak.
+  const dates = pastTuesdaysForDisplay(9);
   const [attendeesByDate, cancelled] = await Promise.all([
     getAttendeesByDates(dates),
     getCancelledSessions(),
   ]);
-  const upcoming = upcomingTuesday(dates);
+  // A legutóbbi alkalom van alapból kiválasztva.
+  const mostRecent = dates[dates.length - 1] ?? '';
 
   const state: OverviewState = {
     dates,
-    upcoming,
-    selected: upcoming,
+    upcoming: mostRecent,  // a "soron lévő" most a legutóbbi (nincs jövőbeli)
+    selected: mostRecent,
     attendeesByDate,
     cancelled,
   };
