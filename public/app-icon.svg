@@ -1,0 +1,32 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512">
+  <!-- Háttér gradient: brand piros → narancs -->
+  <defs>
+    <linearGradient id="bg" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#ef4444"/>
+      <stop offset="100%" stop-color="#f97316"/>
+    </linearGradient>
+    <radialGradient id="highlight" cx="35%" cy="30%" r="60%">
+      <stop offset="0%" stop-color="#ffffff" stop-opacity="0.35"/>
+      <stop offset="100%" stop-color="#ffffff" stop-opacity="0"/>
+    </radialGradient>
+  </defs>
+
+  <!-- Lekerekített négyzet alap (iOS automatikus mask-elés is jól néz ki rajta) -->
+  <rect width="512" height="512" rx="100" fill="url(#bg)"/>
+
+  <!-- Felső fényfolt — premium érzet -->
+  <rect width="512" height="512" rx="100" fill="url(#highlight)"/>
+
+  <!-- Röplabda — vonalas, fehér -->
+  <g transform="translate(96, 96)" fill="none" stroke="#ffffff" stroke-width="14" stroke-linecap="round" stroke-linejoin="round">
+    <!-- Körvonal -->
+    <circle cx="160" cy="160" r="148"/>
+    <!-- Klasszikus röplabda háromágú mintázat -->
+    <path d="M 12 160 Q 90 105 160 160 T 308 160"/>
+    <path d="M 160 12 Q 105 90 160 160 T 160 308"/>
+    <path d="M 160 12 Q 215 90 160 160 T 160 308"/>
+    <path d="M 12 160 Q 90 215 160 160 T 308 160"/>
+    <!-- Halvány belső kör — mélység -->
+    <circle cx="160" cy="160" r="120" opacity="0.35"/>
+  </g>
+</svg>
