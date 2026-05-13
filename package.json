@@ -17,6 +17,8 @@
   },
   "dependencies": {
     "firebase": "^12.13.0",
+    "jspdf": "^4.2.1",
+    "jspdf-autotable": "^5.0.7",
     "qrcode": "^1.5.4"
   }
 }

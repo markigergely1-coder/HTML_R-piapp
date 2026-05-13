@@ -261,12 +261,23 @@ function renderCalcResult(state: AccState): string {
 
   return `
     <div class="card fade-up overflow-hidden" style="border-radius:20px">
-      <div class="px-4 py-3 flex items-center justify-between" style="border-bottom:1px solid var(--line)">
-        <div>
+      <div class="px-4 py-3 flex items-center justify-between gap-2" style="border-bottom:1px solid var(--line)">
+        <div class="min-w-0 flex-1">
           <p class="eyebrow text-[10px] mb-0.5">Elszámolás</p>
-          <p class="text-[15px] font-bold text-fg-1">${eh(year + '. ' + monthName)}</p>
+          <p class="text-[15px] font-bold text-fg-1 truncate">${eh(year + '. ' + monthName)}</p>
         </div>
-        ${statusBadge}
+        <div class="flex items-center gap-2 flex-none">
+          ${statusBadge}
+          <button id="acc-download-pdf"
+            class="text-[11.5px] font-semibold px-2.5 py-1 rounded-full transition-colors inline-flex items-center gap-1"
+            style="background:color-mix(in oklab,var(--accent) 14%,transparent);color:var(--accent-ink)"
+            title="PDF letöltése">
+            <svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M8 2v9M5 8l3 3 3-3M3 13h10"/>
+            </svg>
+            PDF
+          </button>
+        </div>
       </div>
 
       <!-- Per session breakdown -->
@@ -444,6 +455,33 @@ function attachHandlers(container: HTMLElement, state: AccState) {
       state.calculating = false;
       rerender(container, state);
     }
+  });
+
+  // PDF letöltés — lazy import (jsPDF nagy, csak akkor töltsük be ha kell)
+  const pdfBtn = container.querySelector<HTMLButtonElement>('#acc-download-pdf');
+  pdfBtn?.addEventListener('click', async () => {
+    const c = state.loadedCalc;
+    if (!c || c.perPerson.length === 0) {
+      showToast(state, 'error', 'Nincs adat a PDF generáláshoz.');
+      rerender(container, state);
+      return;
+    }
+    try {
+      const monthName = 'monthName' in c ? c.monthName : '';
+      const { generateSettlementPdf, downloadPdf } = await import('../lib/pdf');
+      const blob = generateSettlementPdf({
+        year: c.year,
+        monthName,
+        perPerson: c.perPerson,
+      });
+      const filename = `Havi_Elszamolas_${c.year}_${monthName.replace(/\s+/g, '_')}.pdf`;
+      downloadPdf(blob, filename);
+      showToast(state, 'success', '📥 PDF letöltve');
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      showToast(state, 'error', `❌ PDF hiba: ${msg}`);
+    }
+    rerender(container, state);
   });
 
   const bulkForce = container.querySelector<HTMLInputElement>('#acc-bulk-force');
