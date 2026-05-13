@@ -1,0 +1,63 @@
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // ─── Helper függvény ───
+    function isAdmin() {
+      return request.auth != null
+        && request.auth.token.email_verified == true
+        && request.auth.token.email.lower() in [
+          'markigergely1@gmail.com',
+          'annemaryaf@gmail.com'
+        ];
+    }
+
+    // ─── Publikus kollekciók (bárki olvashatja, admin írhatja) ───
+    // A profil + alkalmak + adatbázis oldal ezeket olvassa — nem-bejelentkezett
+    // látogatók is láthatják.
+    match /attendance_records/{doc} {
+      allow read: if true;
+      allow write: if isAdmin();
+    }
+    match /cancelled_sessions/{doc} {
+      allow read: if true;
+      allow write: if isAdmin();
+    }
+    match /members/{doc} {
+      allow read: if true;
+      allow write: if isAdmin();
+    }
+    // QR check-in publikus — bárki regisztrálhat magát
+    match /device_registrations/{doc} {
+      allow read, write: if true;
+    }
+
+    // ─── Admin-only kollekciók ───
+    match /invoices/{doc} {
+      allow read, write: if isAdmin();
+    }
+    match /settlements/{doc} {
+      allow read, write: if isAdmin();
+    }
+    match /app_logs/{doc} {
+      allow read, write: if isAdmin();
+    }
+    match /revolut_name_mapping/{doc} {
+      allow read, write: if isAdmin();
+    }
+    match /test_ping/{doc} {
+      allow read, write: if isAdmin();
+    }
+
+    // Historical / legacy kollekciók (Streamlit verzió hagyatéka) — nyilvános olvasás
+    match /historical_session_totals/{doc} {
+      allow read: if true;
+      allow write: if isAdmin();
+    }
+    match /legacy_attendance/{doc} {
+      allow read: if true;
+      allow write: if isAdmin();
+    }
+  }
+}

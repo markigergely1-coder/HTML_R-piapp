@@ -1,18 +1,17 @@
 /**
- * Firebase Authentication — Google sign-in REDIRECT módon + admin ellenőrzés.
+ * Firebase Authentication — Google sign-in popup-first + redirect fallback.
  *
- * Miért redirect és nem popup?
- * Modern böngészők (Chrome/Edge 2024+, Brave, Safari) a Cross-Origin-Opener-Policy
- * és/vagy third-party cookie korlátozások miatt nem engedik a popup-nak hogy
- * visszaüzenjen a parent ablaknak. A popup felvillan, majd bezáródik, eredmény nélkül.
- * A redirect ezt megkerüli: az egész oldal navigál Google-re, majd vissza.
+ * Firebase Hosting alatt (jelenlegi setup) az app és az authDomain ugyanaz
+ * az origin → a popup megbízhatóan működik (nincs third-party cookie probléma).
+ * Ha mégis blokkolva van (popup blocker, COOP), automatikusan átvált redirect-re.
  *
  * FONTOS: A kliens-oldali admin check CSAK UI-hoz használandó.
- * Az igazi védelem a Firestore Security Rules-ban van (lásd README).
+ * Az igazi védelem a Firestore Security Rules-ban van.
  */
 
 import {
   onAuthStateChanged,
+  signInWithPopup,
   signInWithRedirect,
   getRedirectResult,
   signOut as fbSignOut,
@@ -46,7 +45,6 @@ onAuthStateChanged(auth, (user) => {
 });
 
 // Modulbetöltéskor egyszer kikéri a függő redirect eredményt (ha van).
-// A Firebase magától is feldolgozza, de ez biztos hogy futott egy "rendet rak" passz.
 getRedirectResult(auth).catch((err) => {
   console.warn('[auth] getRedirectResult error:', err);
 });
@@ -63,17 +61,23 @@ export function onAuthChange(cb: (state: AuthState) => void): () => void {
 }
 
 /**
- * Google bejelentkezés redirect módon.
+ * Google bejelentkezés — popup-tal (modern UX), redirect fallback-kel.
  *
- * A popup mód (signInWithPopup) hosztolt környezetben (pl. Vercel) megbízhatatlan:
- * a popup `firebaseapp.com` origin-re nyílik, és a böngészők third-party cookie
- * blokkolása miatt a popup nem tud visszaüzenni — felvillan, bezáródik, semmi.
- *
- * A redirect ezt megkerüli: az egész oldal navigál Google-re, majd vissza,
- * és a getRedirectResult() modulbetöltéskor felveszi az eredményt.
+ * Firebase Hostingon az app és authDomain ugyanaz a *.firebaseapp.com origin,
+ * így a popup-nek nincs cross-origin storage problémája. Ha a böngésző mégis
+ * blokkolja (popup blocker, COOP fejléc, vagy más környezeti probléma), a
+ * redirect fallback automatikusan elindul.
  */
 export async function signIn(): Promise<void> {
-  await signInWithRedirect(auth, googleProvider);
+  try {
+    await signInWithPopup(auth, googleProvider);
+  } catch (err) {
+    const code = (err as { code?: string })?.code ?? '';
+    // Felhasználó szándékosan zárta be? Ne erőltessük a redirectet.
+    if (code === 'auth/cancelled-popup-request') return;
+    console.warn('[auth] popup failed, falling back to redirect:', code, err);
+    await signInWithRedirect(auth, googleProvider);
+  }
 }
 
 export async function signOut(): Promise<void> {
