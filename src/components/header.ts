@@ -139,7 +139,7 @@ function renderThemeToggle(): string {
 function renderLogo(): string {
   return `
     <div class="w-8 h-8 rounded-[10px] flex items-center justify-center relative overflow-hidden"
-         style="background: linear-gradient(135deg, var(--accent) 0%, #f97316 100%)">
+         style="background: linear-gradient(135deg, var(--accent) 0%, #14b8a6 100%)">
       <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="#fff" stroke-width="1.5">
         <circle cx="12" cy="12" r="9" />
         <path d="M3 12c4.5-1.5 13.5-1.5 18 0" />

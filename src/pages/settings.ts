@@ -247,7 +247,7 @@ function renderCancelledList(state: SettingsState): string {
 function renderToast(toast: NonNullable<SettingsState['toast']>): string {
   const palette = toast.kind === 'success'
     ? 'background:color-mix(in oklab,#10b981 14%,var(--bg-card));border:1px solid color-mix(in oklab,#10b981 30%,var(--line));color:#047857'
-    : 'background:color-mix(in oklab,var(--accent) 14%,var(--bg-card));border:1px solid color-mix(in oklab,var(--accent) 30%,var(--line));color:var(--accent-ink)';
+    : 'background:color-mix(in oklab,var(--danger) 14%,var(--bg-card));border:1px solid color-mix(in oklab,var(--danger) 30%,var(--line));color:var(--danger-ink)';
   return `
     <div id="toast" class="fixed left-1/2 -translate-x-1/2 z-50 px-4 py-2.5 rounded-full shadow-lg text-[12.5px] font-semibold fade-up"
       style="bottom:24px;${palette}">${eh(toast.msg)}</div>`;

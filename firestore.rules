@@ -18,16 +18,16 @@ service cloud.firestore {
     // látogatók is láthatják.
     match /attendance_records/{doc} {
       allow read: if true;
-      allow write: if isAdmin();
-      // Önregisztráció: bejelentkezett, email-ellenőrzött tag hozhat létre/módosíthat rekordot
-      allow create: if request.auth != null
-        && request.auth.token.email_verified == true
-        && request.resource.data.mode == 'valós'
-        && request.resource.data.name is string;
-      allow update: if request.auth != null
-        && request.auth.token.email_verified == true;
-      // Résztvevő törlés az Alkalmak oldalról — mindenki (bejelentkezés nélkül is)
-      // megteheti, mert kis bizalmi csoport (kis röplabda csapat).
+      // Kis bizalmi csoport (kis röplabda csapat) — bárki (bejelentkezés nélkül is)
+      // regisztrálhat, módosíthat, törölhet jelenléti rekordot.
+      // Alapvető validáció create-nél, hogy ne lehessen szemét rekordokat felvinni.
+      allow create: if request.resource.data.mode == 'valós'
+        && request.resource.data.name is string
+        && request.resource.data.name.size() > 0
+        && request.resource.data.name.size() < 100
+        && request.resource.data.status in ['Yes', 'No']
+        && request.resource.data.event_date is string;
+      allow update: if true;
       allow delete: if true;
     }
     match /cancelled_sessions/{doc} {

@@ -352,10 +352,10 @@ function renderAttendeesSection(attendees: string[], state: OverviewState): stri
         <button type="button"
           data-action="remove-attendee" data-name="${ea(name)}"
           class="attendee-edit card relative flex items-center gap-2.5 px-3 py-2.5 transition-transform"
-          style="border-radius:16px;color:inherit;text-align:left;border:1px solid var(--accent);animation:jiggle 0.6s ease-in-out infinite alternate">
+          style="border-radius:16px;color:inherit;text-align:left;border:1px solid var(--danger);animation:jiggle 0.6s ease-in-out infinite alternate">
           <span aria-hidden="true"
             class="absolute -top-1.5 -right-1.5 w-5 h-5 rounded-full flex items-center justify-center flex-shrink-0 text-white text-[12px] font-bold shadow-md"
-            style="background:var(--accent);line-height:1">×</span>
+            style="background:var(--danger);line-height:1">×</span>
           <div class="rounded-full flex items-center justify-center flex-shrink-0 font-semibold text-[10px]"
                style="width:28px;height:28px;flex-shrink:0;background:linear-gradient(135deg,hsl(${hue} 80% 88%) 0%,hsl(${(hue+30)%360} 75% 78%) 100%);color:hsl(${hue} 60% 30%)">
             ${eh(initials)}
@@ -380,7 +380,7 @@ function renderAttendeesSection(attendees: string[], state: OverviewState): stri
   const editBtn = `
     <button id="attendees-edit-toggle" type="button"
       class="text-[11px] font-semibold px-2.5 py-1 rounded-full transition-colors"
-      style="background:${editing ? 'var(--accent)' : 'var(--bg-elev)'};color:${editing ? '#fff' : 'var(--fg-2)'};border:1px solid ${editing ? 'var(--accent)' : 'var(--line)'}">
+      style="background:${editing ? 'var(--danger)' : 'var(--bg-elev)'};color:${editing ? '#fff' : 'var(--fg-2)'};border:1px solid ${editing ? 'var(--danger)' : 'var(--line)'}">
       ${editing ? 'Kész' : 'Szerkesztés'}
     </button>`;
 
@@ -412,8 +412,8 @@ function renderDeleteConfirmModal(state: OverviewState): string {
         style="border-radius:24px;max-width:380px;width:100%;box-shadow:var(--shadow-lg);border:1px solid var(--line-strong)">
         <div class="relative p-6">
           <div class="w-14 h-14 mx-auto mb-4 rounded-full flex items-center justify-center"
-            style="background:color-mix(in oklab,var(--accent) 14%,transparent)">
-            <svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="var(--accent)" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            style="background:color-mix(in oklab,var(--danger) 14%,transparent)">
+            <svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="var(--danger)" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
               <path d="M3 6h18M8 6V4a2 2 0 012-2h4a2 2 0 012 2v2M6 6l1 14a2 2 0 002 2h6a2 2 0 002-2l1-14"/>
               <line x1="10" y1="11" x2="10" y2="17"/><line x1="14" y1="11" x2="14" y2="17"/>
             </svg>
@@ -428,7 +428,7 @@ function renderDeleteConfirmModal(state: OverviewState): string {
           <div class="flex flex-col gap-2">
             <button id="delete-confirm-yes" type="button"
               class="w-full px-4 py-2.5 rounded-full text-white text-[14px] font-semibold transition-colors ${state.deleting ? 'opacity-60 cursor-not-allowed' : ''}"
-              style="background:var(--accent)"
+              style="background:var(--danger)"
               ${state.deleting ? 'disabled' : ''}>
               ${state.deleting ? 'Törlés…' : 'Igen, törlés'}
             </button>

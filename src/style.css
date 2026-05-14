@@ -2,13 +2,14 @@
 
 /* ─── Röpi App — Design Tokenek ─── */
 @theme {
-  --color-brand-50:  #fef2f2;
-  --color-brand-100: #fee2e2;
-  --color-brand-200: #fecaca;
-  --color-brand-400: #f87171;
-  --color-brand-500: #ef4444;
-  --color-brand-600: #dc2626;
-  --color-brand-700: #b91c1c;
+  /* Brand smaragdzöld paletta (Tailwind emerald) */
+  --color-brand-50:  #ecfdf5;
+  --color-brand-100: #d1fae5;
+  --color-brand-200: #a7f3d0;
+  --color-brand-400: #34d399;
+  --color-brand-500: #10b981;
+  --color-brand-600: #059669;
+  --color-brand-700: #047857;
 
   --font-display: "Inter", system-ui, "Segoe UI", sans-serif;
   --font-mono:    "JetBrains Mono", ui-monospace, monospace;
@@ -27,13 +28,19 @@
   --line: #ebe7e0;
   --line-strong: #d9d4ca;
 
-  --accent:      #ef4444;
-  --accent-soft: #fee2e2;
-  --accent-ink:  #b91c1c;
+  /* Fő brand szín — smaragdzöld */
+  --accent:      #059669;   /* emerald-600 */
+  --accent-soft: #d1fae5;   /* emerald-100 */
+  --accent-ink:  #047857;   /* emerald-700 */
 
-  --hue-ring-1: #ef4444;
-  --hue-ring-2: #f59e0b;
-  --hue-ring-3: #10b981;
+  /* Veszélyzóna — törlés / hibás állapot (piros marad) */
+  --danger:      #ef4444;   /* red-500 */
+  --danger-soft: #fee2e2;   /* red-100 */
+  --danger-ink:  #b91c1c;   /* red-700 */
+
+  --hue-ring-1: #059669;    /* emerald — kerek karrier cél */
+  --hue-ring-2: #f59e0b;    /* amber  — éves cél */
+  --hue-ring-3: #0ea5e9;    /* sky    — havi cél */
 
   --radius:    22px;
   --radius-sm: 14px;
