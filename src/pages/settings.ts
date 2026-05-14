@@ -6,12 +6,16 @@
 
 import { renderHeader } from '../components/header';
 import { getAuthState, onAuthChange, signIn } from '../lib/auth';
+import { logEvent } from '../lib/logger';
 import { formatDateHuLong, todayInHungary } from '../lib/dates';
 import {
   getCancelledSessionsWithIds,
   addCancelledSession,
   deleteCancelledSession,
+  getAppConfig,
+  saveAppConfig,
   type CancelledSessionWithId,
+  type AppConfig,
 } from '../lib/firestore';
 
 interface SettingsState {
@@ -19,6 +23,8 @@ interface SettingsState {
   newDate: string;
   newReason: string;
   toast: { kind: 'success' | 'error'; msg: string } | null;
+  appConfig: AppConfig;
+  configSaving: boolean;
 }
 
 let toastTimer: number | null = null;
@@ -35,12 +41,17 @@ export async function renderSettingsPage(container: HTMLElement): Promise<void> 
   if (!auth.user)        return showSignInGate(container);
   if (!auth.isAdmin)     return showNoPermissionGate(container, auth.user.email ?? '');
 
-  const cancelled = await getCancelledSessionsWithIds();
+  const [cancelled, appConfig] = await Promise.all([
+    getCancelledSessionsWithIds(),
+    getAppConfig(),
+  ]);
   const state: SettingsState = {
     cancelled,
     newDate: todayInHungary(),
     newReason: '',
     toast: null,
+    appConfig,
+    configSaving: false,
   };
 
   rerender(container, state);
@@ -119,6 +130,7 @@ function renderBody(state: SettingsState): string {
     <div class="lg:grid lg:grid-cols-[400px_1fr] lg:gap-6 lg:p-6 lg:pt-5 lg:items-start">
       <!-- Új kivétel form -->
       <aside class="lg:sticky lg:top-[110px] space-y-3 px-5 pt-5 lg:px-0 lg:pt-0">
+        ${renderEmailSettingsCard(state)}
         <div class="card p-4 fade-up">
           <div class="flex items-center gap-2 mb-3">
             <span class="text-xl">📅</span>
@@ -156,6 +168,41 @@ function renderBody(state: SettingsState): string {
       </section>
     </div>
     ${state.toast ? renderToast(state.toast) : ''}`;
+}
+
+function renderEmailSettingsCard(state: SettingsState): string {
+  return `
+    <div class="card p-4 fade-up">
+      <div class="flex items-center gap-2 mb-3">
+        <span class="text-xl">📧</span>
+        <div>
+          <p class="eyebrow text-[10px]">Email</p>
+          <p class="text-[15px] font-semibold text-fg-1">Email beállítások</p>
+        </div>
+      </div>
+      <div class="space-y-2.5">
+        <label class="block">
+          <span class="text-[10px] font-semibold text-fg-3 block mb-1">Feladó neve</span>
+          <input id="cfg-sender-name" type="text" value="${ea(state.appConfig.senderName)}"
+            placeholder="pl. Röpi Edzés"
+            class="w-full rounded-[12px] border px-3 py-2.5 text-[14px] text-fg-1 placeholder-fg-3 focus:outline-none"
+            style="border-color:var(--line-strong); background:var(--bg-card)" />
+        </label>
+        <label class="block">
+          <span class="text-[10px] font-semibold text-fg-3 block mb-1">Email lábléc</span>
+          <textarea id="cfg-email-footer" rows="3"
+            placeholder="pl. Kérdés esetén írj vissza erre az emailre."
+            class="w-full rounded-[12px] border px-3 py-2.5 text-[14px] text-fg-1 placeholder-fg-3 focus:outline-none resize-none"
+            style="border-color:var(--line-strong); background:var(--bg-card)">${ea(state.appConfig.emailFooter)}</textarea>
+        </label>
+        <button id="cfg-save"
+          class="w-full px-4 py-2.5 rounded-full text-white text-[13px] font-semibold shadow-sm transition-colors ${state.configSaving ? 'opacity-60 cursor-not-allowed' : ''}"
+          style="background:var(--accent)"
+          ${state.configSaving ? 'disabled' : ''}>
+          ${state.configSaving ? 'Mentés…' : 'Mentés'}
+        </button>
+      </div>
+    </div>`;
 }
 
 function renderCancelledList(state: SettingsState): string {
@@ -224,6 +271,28 @@ function rerender(container: HTMLElement, state: SettingsState) {
 }
 
 function attachHandlers(container: HTMLElement, state: SettingsState) {
+  container.querySelector<HTMLInputElement>('#cfg-sender-name')?.addEventListener('input', (e) => {
+    state.appConfig.senderName = (e.target as HTMLInputElement).value;
+  });
+  container.querySelector<HTMLTextAreaElement>('#cfg-email-footer')?.addEventListener('input', (e) => {
+    state.appConfig.emailFooter = (e.target as HTMLTextAreaElement).value;
+  });
+  container.querySelector<HTMLButtonElement>('#cfg-save')?.addEventListener('click', async () => {
+    if (state.configSaving) return;
+    state.configSaving = true;
+    rerender(container, state);
+    try {
+      await saveAppConfig(state.appConfig);
+      void logEvent('info', 'App config saved', { senderName: state.appConfig.senderName });
+      state.toast = { kind: 'success', msg: '✓ Email beállítások mentve' };
+    } catch (e) {
+      state.toast = { kind: 'error', msg: `Hiba: ${String(e)}` };
+    } finally {
+      state.configSaving = false;
+      rerender(container, state);
+    }
+  });
+
   const dateInput = container.querySelector<HTMLInputElement>('#new-cancel-date');
   const reasonInput = container.querySelector<HTMLInputElement>('#new-cancel-reason');
   dateInput?.addEventListener('input', () => {
@@ -250,6 +319,7 @@ function attachHandlers(container: HTMLElement, state: SettingsState) {
     }
     try {
       await addCancelledSession(date, state.newReason);
+      void logEvent('info', 'Cancelled session added', { date, reason: state.newReason });
       state.cancelled = await getCancelledSessionsWithIds();
       state.newReason = '';
       state.toast = { kind: 'success', msg: '✓ Hozzáadva' };
@@ -269,6 +339,7 @@ function attachHandlers(container: HTMLElement, state: SettingsState) {
       if (!confirm(`Biztosan törlöd?\n\n${formatDateHuLong(item.date)}`)) return;
       try {
         await deleteCancelledSession(id);
+        void logEvent('warn', 'Cancelled session deleted', { date: item.date });
         state.cancelled = state.cancelled.filter((x) => x.id !== id);
         state.toast = { kind: 'success', msg: '🗑️ Törölve' };
         rerender(container, state);

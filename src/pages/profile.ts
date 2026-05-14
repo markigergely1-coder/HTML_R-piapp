@@ -4,7 +4,8 @@
  */
 
 import { renderHeader } from '../components/header';
-import { getAllAttendanceRecords, type RawAttendance } from '../lib/firestore';
+import { getAllAttendanceRecords, getSettlementsForPlayer, type RawAttendance, type PlayerSettlementRow } from '../lib/firestore';
+import { getAuthState } from '../lib/auth';
 import { getInitials } from '../lib/avatar';
 import { estimateCost, formatHuf } from '../lib/cost';
 import { formatDateHuLong } from '../lib/dates';
@@ -20,6 +21,9 @@ interface ProfileState {
   selectedName: string;
   selectedYear: number;
   playerSessions: ProfileSession[];
+  isAdmin: boolean;
+  settlementRows: PlayerSettlementRow[];
+  settlementsLoading: boolean;
 }
 
 const MONTH_SHORT = ['Jan','Feb','Már','Ápr','Máj','Jún','Júl','Aug','Szep','Okt','Nov','Dec'];
@@ -66,10 +70,14 @@ export async function renderProfilePage(container: HTMLElement): Promise<void> {
     selectedName: initialName,
     selectedYear: availableYears.includes(currentYear) ? currentYear : availableYears[0] || currentYear,
     playerSessions: [],
+    isAdmin: getAuthState().isAdmin,
+    settlementRows: [],
+    settlementsLoading: false,
   };
   recomputePlayerSessions(state);
   container.innerHTML = renderShell(renderBody(state));
   attachHandlers(container, state);
+  if (state.isAdmin) loadSettlementsForPlayer(container, state);
 }
 
 // ─── Shell ───
@@ -275,6 +283,8 @@ function renderFinancial(state: ProfileState): string {
 
   const est = estimateCost(yearCount, state.selectedYear);
 
+  const settlementsSection = state.isAdmin ? renderSettlementsTable(state) : '';
+
   return `
     <section class="fade-up" style="animation-delay:120ms">
       <div class="flex items-end justify-between mb-3">
@@ -304,7 +314,63 @@ function renderFinancial(state: ProfileState): string {
           </div>
         </div>
       </div>
+      ${settlementsSection}
     </section>`;
+}
+
+function renderSettlementsTable(state: ProfileState): string {
+  if (state.settlementsLoading) {
+    return `
+      <div class="mt-3 card p-4 flex items-center gap-3" style="border-radius:20px">
+        <div class="w-4 h-4 rounded-full border-2 animate-spin flex-shrink-0" style="border-color:var(--accent) var(--line) var(--line) var(--line)"></div>
+        <span class="text-[12px] text-fg-3">Elszámolások betöltése…</span>
+      </div>`;
+  }
+
+  if (state.settlementRows.length === 0) {
+    return `
+      <div class="mt-3 card-soft p-4 text-center" style="border-radius:20px">
+        <p class="text-[12px] text-fg-3">Nincs mentett elszámolás erre a játékosra.</p>
+      </div>`;
+  }
+
+  const totalCount = state.settlementRows.reduce((s, r) => s + r.count, 0);
+  const totalAmount = state.settlementRows.reduce((s, r) => s + r.amount, 0);
+
+  const rows = state.settlementRows.map((r, i) => {
+    const isSelected = r.year === state.selectedYear;
+    return `
+      <tr style="${i > 0 ? 'border-top:1px solid var(--line)' : ''}${isSelected ? ';background:color-mix(in oklab,var(--accent) 6%,transparent)' : ''}">
+        <td class="px-3 py-2 text-[11.5px] font-mono-tnum ${isSelected ? 'font-semibold text-fg-1' : 'text-fg-2'}">${r.year}. ${r.monthName}</td>
+        <td class="px-3 py-2 text-[11.5px] font-mono-tnum text-right ${isSelected ? 'font-semibold text-fg-1' : 'text-fg-2'}">${r.count}</td>
+        <td class="px-3 py-2 text-[11.5px] font-mono-tnum text-right ${isSelected ? 'font-semibold text-fg-1' : 'text-fg-2'}">${formatHuf(r.amount)}</td>
+      </tr>`;
+  }).join('');
+
+  return `
+    <div class="mt-3 card overflow-hidden" style="border-radius:20px">
+      <div class="px-3 py-2.5 flex items-center justify-between" style="border-bottom:1px solid var(--line)">
+        <span class="eyebrow text-[10px]">Mentett elszámolások</span>
+        <span class="text-[10px] font-mono-tnum text-fg-3">${state.settlementRows.length} hónap</span>
+      </div>
+      <table class="w-full">
+        <thead>
+          <tr style="border-bottom:1px solid var(--line)">
+            <th class="px-3 py-2 text-left eyebrow text-[9px]">Hónap</th>
+            <th class="px-3 py-2 text-right eyebrow text-[9px]">Alkalom</th>
+            <th class="px-3 py-2 text-right eyebrow text-[9px]">Összeg</th>
+          </tr>
+        </thead>
+        <tbody>${rows}</tbody>
+        <tfoot>
+          <tr style="border-top:2px solid var(--line-strong)">
+            <td class="px-3 py-2 text-[11px] font-semibold text-fg-1">Összesen</td>
+            <td class="px-3 py-2 text-[11px] font-mono-tnum font-semibold text-fg-1 text-right">${totalCount}</td>
+            <td class="px-3 py-2 text-[11px] font-mono-tnum font-semibold text-fg-1 text-right">${formatHuf(totalAmount)}</td>
+          </tr>
+        </tfoot>
+      </table>
+    </div>`;
 }
 
 // ─── Éves Chart ───
@@ -443,6 +509,23 @@ function recomputePlayerSessions(state: ProfileState) {
   state.playerSessions = sessions;
 }
 
+function loadSettlementsForPlayer(container: HTMLElement, state: ProfileState) {
+  const name = state.selectedName;
+  state.settlementRows = [];
+  state.settlementsLoading = true;
+  const body = container.querySelector<HTMLElement>('#profile-body');
+  if (body) { body.innerHTML = renderBody(state); attachHandlers(container, state); }
+  getSettlementsForPlayer(name)
+    .then((rows) => {
+      if (state.selectedName !== name) return; // player changed — discard stale result
+      state.settlementRows = rows;
+      state.settlementsLoading = false;
+      const b = container.querySelector<HTMLElement>('#profile-body');
+      if (b) { b.innerHTML = renderBody(state); attachHandlers(container, state); }
+    })
+    .catch(() => { state.settlementsLoading = false; });
+}
+
 function attachHandlers(container: HTMLElement, state: ProfileState) {
   const playerSel = container.querySelector<HTMLSelectElement>('#player-select')!;
   const yearSel   = container.querySelector<HTMLSelectElement>('#year-select')!;
@@ -454,8 +537,12 @@ function attachHandlers(container: HTMLElement, state: ProfileState) {
     attachHandlers(container, state);
   };
 
-  playerSel.addEventListener('change', () => { state.selectedName = playerSel.value; refresh(); });
-  yearSel.addEventListener('change',   () => { state.selectedYear  = Number(yearSel.value); refresh(); });
+  playerSel.addEventListener('change', () => {
+    state.selectedName = playerSel.value;
+    refresh();
+    if (state.isAdmin) loadSettlementsForPlayer(container, state);
+  });
+  yearSel.addEventListener('change', () => { state.selectedYear = Number(yearSel.value); refresh(); });
 }
 
 // ─── Utils ───

@@ -15,6 +15,7 @@ import { defineSecret } from 'firebase-functions/params';
 import { setGlobalOptions } from 'firebase-functions/v2';
 import * as nodemailer from 'nodemailer';
 
+// Runtime: Node.js 22 (upgraded from 20)
 setGlobalOptions({ region: 'europe-west1', maxInstances: 3 });
 
 const GMAIL_USER = defineSecret('GMAIL_USER');

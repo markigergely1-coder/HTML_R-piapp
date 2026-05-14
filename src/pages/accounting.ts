@@ -11,6 +11,7 @@
 
 import { renderHeader } from '../components/header';
 import { getAuthState, onAuthChange, signIn } from '../lib/auth';
+import { logEvent } from '../lib/logger';
 import {
   getAllSettlements,
   getAllInvoices,
@@ -617,6 +618,7 @@ function attachHandlers(container: HTMLElement, state: AccState) {
       recomputeEmailRecipients(state);
       state.emailResult = null;
       showToast(state, 'success', `✅ Kalkuláció kész: ${result.year}. ${result.monthName}`);
+      void logEvent('info', 'Accounting calculated', { year: result.year, month: inv.target_month, monthName: result.monthName });
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       showToast(state, 'error', `❌ ${msg}`);
@@ -741,6 +743,7 @@ function attachHandlers(container: HTMLElement, state: AccState) {
       const errPart = result.adminError ? ` (admin: ${result.adminError})` : '';
       showToast(state, result.personalFailed.length === 0 ? 'success' : 'info',
         `📧 ${result.personalSent}/${result.totalRequested} kiküldve${errPart}`);
+      void logEvent('info', 'Billing emails sent', { sent: result.personalSent, failed: result.personalFailed.length, year: c.year, monthName });
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       showToast(state, 'error', `❌ Email küldési hiba: ${msg}`);
@@ -760,6 +763,7 @@ function attachHandlers(container: HTMLElement, state: AccState) {
     state.bulkRunning = true;
     state.bulkResult = null;
     rerender(container, state);
+    void logEvent('info', 'Bulk accounting started', { invoiceCount: state.invoices.length });
     try {
       // Egyszer letöltjük az attendance + cancelled adatokat, és minden invoice-ra használjuk
       const [attendance, cancelled] = await Promise.all([

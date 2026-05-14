@@ -42,6 +42,28 @@
   --shadow-lg:   0 30px 60px -30px rgba(20,20,20,0.25), 0 8px 24px -12px rgba(20,20,20,0.1);
 }
 
+/* ─── Sötét téma — explicit toggle vagy rendszer-szintű (initial) ─── */
+:root[data-theme="dark"] {
+  --bg-page:  #141210;
+  --bg-card:  #1e1c19;
+  --bg-elev:  #252320;
+  --bg-glass: rgba(20, 18, 16, 0.82);
+  --fg-1: #f0ece4;
+  --fg-2: #a89f94;
+  --fg-3: #6b6259;
+  --fg-4: #3a3630;
+  --line: #2a2723;
+  --line-strong: #35312c;
+
+  --shadow-card: 0 1px 0 rgba(0,0,0,0.4), 0 4px 16px -8px rgba(0,0,0,0.5);
+  --shadow-lg:   0 30px 60px -30px rgba(0,0,0,0.7), 0 8px 24px -12px rgba(0,0,0,0.4);
+}
+
+:root[data-theme="dark"] .noise::before {
+  mix-blend-mode: screen;
+  opacity: 0.04;
+}
+
 /* ─── Alap ─── */
 html, body {
   margin: 0;
@@ -52,6 +74,10 @@ html, body {
   -webkit-font-smoothing: antialiased;
   text-rendering: optimizeLegibility;
   min-height: 100vh;
+  /* Mobilon ne lehessen vízszintesen görgetni az egész oldalt — csak a belső
+     scroller-ek (dátum-chip rail, header tab scroller) görgessenek. */
+  overflow-x: hidden;
+  max-width: 100vw;
 }
 
 /* ─── Segédosztályok — szín ─── */
@@ -154,6 +180,11 @@ html, body {
   min-height: 100vh;
   background: var(--bg-page);
   position: relative;
+  /* Mobilon is clip-eljük az abszolút pozícionált elemeket (.halo, négyszögletű
+     blur háttér), különben vízszintes scroll keletkezik az overview / profile
+     oldalakon. A belső scroller-ek (date rail) saját overflow-x-auto-juk
+     révén továbbra is működnek. */
+  overflow-x: clip;
 }
 @media (min-width: 640px) {
   body {
@@ -321,6 +352,18 @@ html, body {
 /* ─── Scrollbar elrejtés ─── */
 .no-scrollbar::-webkit-scrollbar { display: none; }
 .no-scrollbar { -ms-overflow-style: none; scrollbar-width: none; }
+
+/* ─── Apple-style "jiggle" szerkesztés módhoz ─── */
+@keyframes jiggle {
+  0%   { transform: rotate(-0.6deg); }
+  100% { transform: rotate(0.6deg); }
+}
+/* Random fáziseltolás minden 2. elemnek, hogy ne egyszerre billegjenek */
+.attendee-edit:nth-child(2n) { animation-delay: -0.3s !important; }
+.attendee-edit:nth-child(3n) { animation-delay: -0.15s !important; }
+@media (prefers-reduced-motion: reduce) {
+  .attendee-edit { animation: none !important; }
+}
 
 /* ─── Desktop layout — lg+ (1024px+): phone shell eltűnik, teljes szélesség ─── */
 @media (min-width: 1024px) {

@@ -15,9 +15,12 @@ import { formatDateHu } from '../lib/dates';
 interface DbState {
   records: RawAttendance[];
   yearFilter: number | 'all';
+  chartYear: number;
   recordFilter: string;
   recordSort: 'date_desc' | 'date_asc' | 'name';
 }
+
+const MONTH_SHORT = ['Jan','Feb','Már','Ápr','Máj','Jún','Júl','Aug','Szep','Okt','Nov','Dec'];
 
 // ─────────────────────────────────────────────────────────────────
 // Belépési pont
@@ -30,6 +33,7 @@ export async function renderDatabasePage(container: HTMLElement): Promise<void> 
   const state: DbState = {
     records,
     yearFilter: 'all',
+    chartYear: new Date().getFullYear(),
     recordFilter: '',
     recordSort: 'date_desc',
   };
@@ -72,6 +76,8 @@ function renderBody(state: DbState): string {
       <!-- Ranglista (bal/sticky desktop, felül mobil) -->
       <aside class="lg:sticky lg:top-[110px] space-y-3 px-5 pt-5 lg:px-0 lg:pt-0">
         ${renderStats(state)}
+        ${renderTeamStats(state)}
+        ${renderChartsSection(state)}
         ${renderRanking(state)}
       </aside>
 
@@ -112,6 +118,192 @@ function renderStats(state: DbState): string {
       ${card('Részvétel',  all,          'red')}
       ${card('Játékos',    uniqueNames,  'sky')}
       ${card('Alkalom',    uniqueDates,  'emerald')}
+    </div>`;
+}
+
+// ─── Csapat statisztikák ───
+function renderTeamStats(state: DbState): string {
+  const yes = state.records.filter((r) => r.status === 'Yes' && r.event_date);
+  const sessionDates = new Set(yes.map((r) => r.event_date));
+  const totalSessions = sessionDates.size;
+  if (totalSessions === 0) return '';
+
+  // Átlag létszám / alkalom
+  const countByDate = new Map<string, number>();
+  for (const r of yes) countByDate.set(r.event_date, (countByDate.get(r.event_date) ?? 0) + 1);
+  const avgAttendees = Math.round([...countByDate.values()].reduce((s, v) => s + v, 0) / totalSessions);
+
+  // Legtöbb résztvevős hónap (YYYY-MM)
+  const byYearMonth = new Map<string, Set<string>>();
+  for (const d of sessionDates) {
+    const ym = (d ?? '').slice(0, 7);
+    if (!byYearMonth.has(ym)) byYearMonth.set(ym, new Set());
+    byYearMonth.get(ym)!.add(d!);
+  }
+  let topYM = ''; let topCount = 0;
+  for (const [ym, dates] of byYearMonth) {
+    if (dates.size > topCount) { topCount = dates.size; topYM = ym; }
+  }
+  const [topY, topM] = topYM.split('-').map(Number);
+  const topLabel = topYM ? `${topY}. ${MONTH_SHORT[topM - 1]}` : '—';
+
+  const cell = (label: string, value: string, sub?: string) => `
+    <div class="flex-1 min-w-0">
+      <p class="eyebrow text-[9px] mb-1">${label}</p>
+      <p class="font-mono-tnum font-semibold text-[20px] leading-none num-display text-fg-1">${value}</p>
+      ${sub ? `<p class="text-[10px] text-fg-3 mt-0.5">${sub}</p>` : ''}
+    </div>`;
+
+  return `
+    <div class="card p-4 fade-up" style="border-radius:22px">
+      <p class="eyebrow text-[10px] mb-3">Csapat összesítő</p>
+      <div class="flex gap-4">
+        ${cell('Összes alkalom', String(totalSessions))}
+        ${cell('Átlag létszám', String(avgAttendees), 'fő / alkalom')}
+        ${cell('Legaktívabb hó', topLabel, `${topCount} alkalom`)}
+      </div>
+    </div>`;
+}
+
+// ─── Statisztikák (diagramok) ───
+function renderChartsSection(state: DbState): string {
+  const years = [...new Set(
+    state.records
+      .map((r) => Number((r.event_date ?? '').slice(0, 4)))
+      .filter(Number.isFinite),
+  )].sort((a, b) => b - a);
+
+  if (years.length === 0) return '';
+
+  const yearOptions = years.map((y) =>
+    `<option value="${y}" ${state.chartYear === y ? 'selected' : ''}>${y}</option>`,
+  ).join('');
+
+  return `
+    <div class="card overflow-hidden fade-up" style="border-radius:22px">
+      <div class="px-4 py-3 flex items-center justify-between" style="border-bottom:1px solid var(--line)">
+        <div>
+          <p class="eyebrow text-[10px] mb-1">Statisztikák</p>
+          <p class="text-[15px] font-semibold text-fg-1">Részvételi diagramok</p>
+        </div>
+        <select id="db-chart-year"
+          class="select-native rounded-[12px] border px-3 py-1.5 text-[12px] font-medium text-fg-1 focus:outline-none"
+          style="border-color:var(--line-strong); background:var(--bg-card)">
+          ${yearOptions}
+        </select>
+      </div>
+      <div class="p-4 space-y-5">
+        ${renderMonthlyAttendanceChart(state)}
+        ${renderYearlyTrendChart(state)}
+        ${renderTop5Card(state)}
+      </div>
+    </div>`;
+}
+
+function renderMonthlyAttendanceChart(state: DbState): string {
+  // Count unique session dates per month for chartYear
+  const sessionDates = new Set(
+    state.records
+      .filter((r) => r.status === 'Yes' && (r.event_date ?? '').slice(0, 4) === String(state.chartYear))
+      .map((r) => r.event_date),
+  );
+  const byMonth = new Array(12).fill(0);
+  for (const d of sessionDates) {
+    const m = Number((d ?? '').slice(5, 7));
+    if (m >= 1 && m <= 12) byMonth[m - 1]++;
+  }
+  const max = Math.max(...byMonth, 1);
+  const BAR = 80;
+  const currentMonth = new Date().getMonth(); // 0-based
+  const isCurrentYear = state.chartYear === new Date().getFullYear();
+
+  const bars = byMonth.map((v, i) => {
+    const h = v > 0 ? Math.max(4, Math.round((v / max) * BAR)) : 4;
+    const isCurrent = isCurrentYear && i === currentMonth;
+    const cls = v === 0 ? 'bar-empty' : isCurrent ? 'bar-brand' : 'bar-emerald';
+    return `
+      <div class="flex-1 flex flex-col items-center gap-1 min-w-0">
+        <span class="text-[9px] font-mono-tnum ${v === 0 ? 'text-fg-3 opacity-50' : 'font-semibold text-fg-1'}">${v || '·'}</span>
+        <div class="bar-fill w-full max-w-[18px] rounded-t-[5px] ${cls}" style="height:${h}px;animation-delay:${i*35}ms"></div>
+        <span class="text-[9px] text-fg-3">${MONTH_SHORT[i]}</span>
+      </div>`;
+  }).join('');
+
+  return `
+    <div>
+      <p class="eyebrow text-[10px] mb-3">Havi részvétel — ${state.chartYear}</p>
+      <div class="flex items-end gap-1" style="min-height:${BAR+32}px">${bars}</div>
+    </div>`;
+}
+
+function renderYearlyTrendChart(state: DbState): string {
+  // Count unique session dates per year
+  const byYear = new Map<number, Set<string>>();
+  for (const r of state.records) {
+    if (r.status !== 'Yes' || !r.event_date) continue;
+    const y = Number(r.event_date.slice(0, 4));
+    if (!Number.isFinite(y)) continue;
+    if (!byYear.has(y)) byYear.set(y, new Set());
+    byYear.get(y)!.add(r.event_date);
+  }
+  const years = [...byYear.keys()].sort((a, b) => a - b);
+  if (years.length === 0) return '';
+  const currentYear = new Date().getFullYear();
+  const counts = years.map((y) => byYear.get(y)!.size);
+  const max = Math.max(...counts, 1);
+  const BAR = 80;
+
+  const bars = years.map((y, i) => {
+    const v = counts[i];
+    const h = Math.max(4, Math.round((v / max) * BAR));
+    const isCurrent = y === currentYear;
+    return `
+      <div class="flex-1 flex flex-col items-center gap-1.5 min-w-0">
+        <span class="text-[9px] font-mono-tnum ${isCurrent ? 'font-semibold text-fg-1' : 'text-fg-2'}">${v}</span>
+        <div class="bar-fill w-full max-w-[32px] rounded-t-[6px] ${isCurrent ? 'bar-brand' : ''}"
+             style="height:${h}px;animation-delay:${i*60}ms;${isCurrent ? '' : 'background:color-mix(in oklab,var(--line-strong) 70%,transparent)'}"></div>
+        <span class="text-[9px] font-mono-tnum ${isCurrent ? 'font-semibold text-fg-1' : 'text-fg-3'}">${y}</span>
+      </div>`;
+  }).join('');
+
+  return `
+    <div style="border-top:1px solid var(--line);padding-top:16px">
+      <p class="eyebrow text-[10px] mb-3">Éves trend — alkalmak száma</p>
+      <div class="flex items-end gap-2" style="min-height:${BAR+32}px">${bars}</div>
+    </div>`;
+}
+
+function renderTop5Card(state: DbState): string {
+  // Top 5 players all-time
+  const counts = new Map<string, number>();
+  for (const r of state.records) {
+    if (r.status === 'Yes') counts.set(r.name, (counts.get(r.name) ?? 0) + 1);
+  }
+  const top5 = [...counts.entries()]
+    .map(([name, count]) => ({ name, count }))
+    .sort((a, b) => b.count - a.count || a.name.localeCompare(b.name, 'hu'))
+    .slice(0, 5);
+  if (top5.length === 0) return '';
+
+  const rows = top5.map((p, i) => {
+    const hue = avatarHue(p.name);
+    const initials = getInitials(p.name);
+    return `
+      <div class="flex items-center gap-2.5" style="${i > 0 ? 'margin-top:8px' : ''}">
+        <span class="text-[11px] font-mono-tnum text-fg-3 w-4 text-right">${i + 1}</span>
+        <div class="rounded-full flex items-center justify-center flex-shrink-0 font-semibold text-[9px]"
+             style="width:24px;height:24px;background:linear-gradient(135deg,hsl(${hue} 80% 88%) 0%,hsl(${(hue+30)%360} 75% 78%) 100%);color:hsl(${hue} 60% 30%)">
+          ${eh(initials)}
+        </div>
+        <span class="flex-1 text-[12px] font-medium text-fg-1 truncate">${eh(p.name)}</span>
+        <span class="font-mono-tnum text-[12px] font-semibold text-fg-1">${p.count}</span>
+      </div>`;
+  }).join('');
+
+  return `
+    <div style="border-top:1px solid var(--line);padding-top:16px">
+      <p class="eyebrow text-[10px] mb-3">Top 5 legaktívabb</p>
+      ${rows}
     </div>`;
 }
 
@@ -289,7 +481,13 @@ function rerender(container: HTMLElement, state: DbState) {
 }
 
 function attachHandlers(container: HTMLElement, state: DbState) {
-  // Év szűrő
+  // Diagram év szűrő
+  container.querySelector<HTMLSelectElement>('#db-chart-year')?.addEventListener('change', (e) => {
+    state.chartYear = Number((e.target as HTMLSelectElement).value);
+    rerender(container, state);
+  });
+
+  // Ranglista év szűrő
   const yearSel = container.querySelector<HTMLSelectElement>('#db-year-filter');
   yearSel?.addEventListener('change', () => {
     state.yearFilter = yearSel.value === 'all' ? 'all' : Number(yearSel.value);

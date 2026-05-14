@@ -8,11 +8,13 @@
 
 import { getAuthState, signIn, signOut } from '../lib/auth';
 import { getInitials } from '../lib/avatar';
+import { getCurrentTheme } from '../lib/theme';
 
 export type PageKey =
   | 'overview'
   | 'profile'
   | 'database'
+  | 'yearly'
   | 'qr'
   | 'admin'
   | 'members'
@@ -25,42 +27,56 @@ interface TabDef {
   key: PageKey;
   label: string;
   href: string;
-  adminOnly?: boolean;
+  visibility: 'always' | 'authed' | 'admin' | 'transient';
 }
 
 const TABS: TabDef[] = [
-  // Publikus
-  { key: 'admin',       label: 'Regisztráció', href: '#/admin' },
-  { key: 'overview',    label: 'Alkalmak',    href: '#/' },
-  { key: 'profile',     label: 'Profil',      href: '#/profile' },
-  { key: 'database',    label: 'Adatbázis',   href: '#/database' },
-  { key: 'qr',          label: 'QR',          href: '#/qr' },
-  // Admin
-  { key: 'members',     label: 'Tagok',       href: '#/members',     adminOnly: true },
-  { key: 'accounting',  label: 'Elszámolás',  href: '#/accounting',  adminOnly: true },
-  { key: 'payments',    label: 'Befizetések', href: '#/payments',    adminOnly: true },
-  { key: 'settings',    label: 'Kivételek',   href: '#/settings',    adminOnly: true },
-  { key: 'diagnostics', label: 'Diagnosztika',href: '#/diagnostics', adminOnly: true },
+  // Mindenkinek (bejelentkezés nélkül is)
+  { key: 'admin',       label: 'Regisztráció', href: '#/admin',       visibility: 'always' },
+  { key: 'overview',    label: 'Alkalmak',    href: '#/',             visibility: 'always' },
+
+  // Tranziens: csak akkor jelenik meg, ha az aktuális oldal a profile
+  { key: 'profile',     label: 'Profil',      href: '#/profile',     visibility: 'transient' },
+
+  // Bejelentkezett user-eknek (admin is)
+  { key: 'database',    label: 'Adatbázis',   href: '#/database',    visibility: 'authed' },
+  { key: 'yearly',      label: 'Statisztikák',href: '#/yearly',      visibility: 'authed' },
+  { key: 'qr',          label: 'QR',          href: '#/qr',          visibility: 'authed' },
+
+  // Admin only
+  { key: 'members',     label: 'Tagok',       href: '#/members',     visibility: 'admin' },
+  { key: 'accounting',  label: 'Elszámolás',  href: '#/accounting',  visibility: 'admin' },
+  { key: 'payments',    label: 'Befizetések', href: '#/payments',    visibility: 'admin' },
+  { key: 'settings',    label: 'Beállítások', href: '#/settings',    visibility: 'admin' },
+  { key: 'diagnostics', label: 'Diagnosztika',href: '#/diagnostics', visibility: 'admin' },
 ];
 
 const PAGE_LABEL: Record<PageKey, string> = {
   overview:    'Alkalmak',
   profile:     'Profil',
   database:    'Adatbázis',
+  yearly:      'Statisztikák',
   qr:          'Check-in',
   admin:       'Regisztráció',
   members:     'Tagok',
   accounting:  'Elszámolás',
   payments:    'Befizetések',
-  settings:    'Kivételek',
+  settings:    'Beállítások',
   diagnostics: 'Diagnosztika',
 };
 
 export function renderHeader(currentPage: PageKey): string {
   const auth = getAuthState();
-  const showAdminTabs = auth.isAdmin;
+  const isLoggedIn = !!auth.user;
+  const isAdmin = auth.isAdmin;
 
-  const tabs = TABS.filter((t) => !t.adminOnly || showAdminTabs)
+  const tabs = TABS.filter((t) => {
+    if (t.visibility === 'always') return true;
+    if (t.visibility === 'transient') return t.key === currentPage; // csak ha rajta vagyunk
+    if (t.visibility === 'authed') return isLoggedIn;
+    if (t.visibility === 'admin') return isAdmin;
+    return false;
+  })
     .map((t) => {
       const active = t.key === currentPage;
       return `
@@ -83,7 +99,8 @@ export function renderHeader(currentPage: PageKey): string {
             <span class="eyebrow text-[9px] mt-0.5">${PAGE_LABEL[currentPage]}</span>
           </div>
         </div>
-        <div class="flex items-center gap-3">
+        <div class="flex items-center gap-2">
+          ${renderThemeToggle()}
           ${renderAuthBlock()}
         </div>
       </div>
@@ -94,6 +111,29 @@ export function renderHeader(currentPage: PageKey): string {
       </nav>
     </div>
   `;
+}
+
+function renderThemeToggle(): string {
+  const isDark = getCurrentTheme() === 'dark';
+  // Kattintáskor az ELLENKEZŐ módra vált, ezért a célállapot ikonját mutatjuk.
+  const icon = isDark
+    // Sun (váltás világosra)
+    ? `<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+         <circle cx="12" cy="12" r="4"/>
+         <path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M4.93 19.07l1.41-1.41M17.66 6.34l1.41-1.41"/>
+       </svg>`
+    // Moon (váltás sötétre)
+    : `<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+         <path d="M21 12.79A9 9 0 1111.21 3 7 7 0 0021 12.79z"/>
+       </svg>`;
+  const title = isDark ? 'Világos mód' : 'Sötét mód';
+  return `
+    <button id="header-theme-toggle" type="button"
+      class="w-8 h-8 rounded-full flex items-center justify-center transition-colors"
+      style="background:var(--bg-elev);color:var(--fg-2);border:1px solid var(--line)"
+      title="${title}" aria-label="${title}">
+      ${icon}
+    </button>`;
 }
 
 function renderLogo(): string {

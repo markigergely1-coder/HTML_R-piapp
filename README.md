@@ -1,54 +1,80 @@
-# Röpi App v2 🏐
+# Röpi App 🏐
 
-A [ropi-app](https://github.com/markigergely1-coder/ropi-app) Streamlit verzió HTML/TypeScript átirata.
+Egy magyar amatőr röplabda csapat heti edzéseit menedzselő PWA.
+Production: **https://attendanceapp-473208.web.app**
 
 ## Tech stack
 
-- **Vite** — build tool
-- **TypeScript** — típusos JS
-- **Tailwind CSS v4** — utility-first styling
-- **Firebase JS SDK** — Firestore + Auth (Google sign-in)
-- **Vercel** — hosting (frontend + serverless functions)
+- **Vite + TypeScript** — vanilla, framework nélkül
+- **Tailwind CSS v4** — utility-first styling, design tokenekkel
+- **Firebase**
+  - Hosting (`firebase deploy --only hosting`)
+  - Firestore (offline persistence, multi-tab)
+  - Auth (Google OAuth, admin email allowlist)
+  - Cloud Functions (`sendBillingEmails` — Gmail SMTP, Node.js 22)
+- **PWA** — service worker, telepíthető, fullscreen, auto-update toast
 
-## Architektúra
+## Funkciók
 
-```
-Browser (HTML + TS) ──► Firebase Auth (Google login)
-                  └──► Firestore (közvetlen olvasás/írás)
-                  └──► Vercel serverless fn (csak GSheets sync-hez)
-```
+**Publikus oldalak**
+- `Regisztráció` — admin felülettel mások jelenlétét regisztrálni
+- `Alkalmak` — hero kártya, dátumválasztó, résztvevők (szerkesztés módban törölhető is)
+- `Profil` — egy játékos statisztikái + diagrammok (kattintással elérhető)
+
+**Bejelentkezés után**
+- `Adatbázis` — ranglista + jelenléti rekordok + havi/éves diagramok + top 5
+- `Statisztikák` — éves összesítők, top játékos évente
+- `QR` — check-in QR kód
+
+**Admin only**
+- `Tagok` — CRUD
+- `Elszámolás` — havi kalkuláció, PDF, email küldés
+- `Befizetések` — Revolut CSV import + automatikus egyeztetés
+- `Beállítások` — email beállítások, lemondott alkalmak
+- `Diagnosztika` — Firestore teszt, app logok, teszt email
 
 ## Setup
 
 ```bash
 npm install
-cp .env.example .env   # töltsd ki Firebase configgal
+cp .env.example .env   # Firebase config értékek
 npm run dev            # http://localhost:5173
 ```
 
-## Scripts
+## Build & deploy
 
-- `npm run dev` — fejlesztői szerver (HMR)
-- `npm run build` — production build a `dist/`-be
-- `npm run preview` — production build előnézet
+```bash
+npm run build                        # → dist/
+firebase deploy --only hosting       # hosting only
+firebase deploy --only firestore:rules
+firebase deploy --only functions     # Cloud Functions
+firebase deploy                      # mindent
+```
+
+Cloud Functions Secrets:
+
+```bash
+firebase functions:secrets:set GMAIL_USER
+firebase functions:secrets:set GMAIL_PASS
+```
 
 ## Mappa struktúra
 
 ```
 src/
-├── lib/          # Firebase setup, utility-k
-├── pages/        # oldalankénti TS belépési pontok
-├── components/   # újrahasználható UI elemek
-├── main.ts       # app entry point
-└── style.css     # Tailwind import + globális stílus
+├── lib/          # Firebase, auth, firestore helpers, logger, theme, ...
+├── pages/        # oldalanként 1 TS modul (admin oldalak lazy import)
+├── components/   # header
+├── main.ts       # entry — startRouter + theme + PWA
+└── style.css     # Tailwind import + design tokenek + dark mode
+
+functions/src/    # Cloud Functions (sendBillingEmails)
+firestore.rules   # security rules
+firebase.json     # hosting + functions + firestore config
 ```
 
-## Állapot
+## Témaválasztás
 
-- [x] Fázis 0 — Setup (Vite + TS + Tailwind + Firebase SDK)
-- [ ] Fázis 1 — Claude Design mockup-ok
-- [ ] Fázis 2 — Firebase + Vercel infrastruktúra
-- [ ] Fázis 3 — Oldalak migrálása
-- [ ] Fázis 4 — GSheets sync serverless fn
-- [ ] Fázis 5 — Tesztelés
-- [ ] Fázis 6 — Átállás
+- Header jobb felső sarokban toggle (☀️ / 🌙)
+- Választás localStorage-ben — felülírja a rendszer beállítást
+- Első indításnál a rendszer `prefers-color-scheme`-t követi

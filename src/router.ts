@@ -12,15 +12,10 @@
 
 import { renderOverviewPage } from './pages/overview';
 import { renderProfilePage } from './pages/profile';
-import { renderQrPage } from './pages/qr';
-import { renderMembersPage } from './pages/members';
 import { renderDatabasePage } from './pages/database';
-import { renderAdminPage } from './pages/admin';
-import { renderSettingsPage } from './pages/settings';
-import { renderDiagnosticsPage } from './pages/diagnostics';
-import { renderAccountingPage } from './pages/accounting';
-import { renderPaymentsPage } from './pages/payments';
+import { renderQrPage } from './pages/qr';
 import { onAuthChange, signIn, signOut } from './lib/auth';
+import { toggleTheme } from './lib/theme';
 
 type Route = {
   pattern: RegExp;
@@ -33,13 +28,14 @@ const ROUTES: Route[] = [
   { pattern: /^#?\/profile\/?$/,    render: renderProfilePage },
   { pattern: /^#?\/database\/?$/,   render: renderDatabasePage },
   { pattern: /^#?\/qr\/?$/,         render: renderQrPage },
-  // Admin
-  { pattern: /^#?\/admin\/?$/,       render: renderAdminPage },
-  { pattern: /^#?\/members\/?$/,     render: renderMembersPage },
-  { pattern: /^#?\/accounting\/?$/,  render: renderAccountingPage },
-  { pattern: /^#?\/payments\/?$/,    render: renderPaymentsPage },
-  { pattern: /^#?\/settings\/?$/,    render: renderSettingsPage },
-  { pattern: /^#?\/diagnostics\/?$/, render: renderDiagnosticsPage },
+  { pattern: /^#?\/yearly\/?$/,    render: async (c) => { const { renderYearlyPage }   = await import('./pages/yearly');   return renderYearlyPage(c); } },
+  // Admin — lazy loaded, only downloaded after admin login
+  { pattern: /^#?\/admin\/?$/,       render: async (c) => { const { renderAdminPage }       = await import('./pages/admin');       return renderAdminPage(c); } },
+  { pattern: /^#?\/members\/?$/,     render: async (c) => { const { renderMembersPage }     = await import('./pages/members');     return renderMembersPage(c); } },
+  { pattern: /^#?\/accounting\/?$/,  render: async (c) => { const { renderAccountingPage }  = await import('./pages/accounting');  return renderAccountingPage(c); } },
+  { pattern: /^#?\/payments\/?$/,    render: async (c) => { const { renderPaymentsPage }    = await import('./pages/payments');    return renderPaymentsPage(c); } },
+  { pattern: /^#?\/settings\/?$/,    render: async (c) => { const { renderSettingsPage }    = await import('./pages/settings');    return renderSettingsPage(c); } },
+  { pattern: /^#?\/diagnostics\/?$/, render: async (c) => { const { renderDiagnosticsPage } = await import('./pages/diagnostics'); return renderDiagnosticsPage(c); } },
 ];
 
 function currentHash(): string {
@@ -93,6 +89,10 @@ export function startRouter(container: HTMLElement) {
       signIn().catch((err) => console.warn('Sign-in failed:', err));
     } else if (target.closest('#header-signout')) {
       signOut().catch((err) => console.warn('Sign-out failed:', err));
+    } else if (target.closest('#header-theme-toggle')) {
+      toggleTheme();
+      // Az aktuális oldal újra-render-elése frissíti az ikont a headerben
+      dispatch(container);
     }
   });
 

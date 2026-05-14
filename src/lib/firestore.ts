@@ -30,6 +30,7 @@ export const COLLECTIONS = {
   DEVICES: 'device_registrations',
   APP_LOGS: 'app_logs',
   REVOLUT_MAPPING: 'revolut_name_mapping',
+  APP_CONFIG: 'app_config',
 } as const;
 
 export interface AttendanceRecord {
@@ -426,6 +427,33 @@ export async function saveSettlement(input: {
   return id;
 }
 
+export interface PlayerSettlementRow {
+  year: number;
+  month: number;
+  monthName: string;
+  count: number;
+  amount: number;
+}
+
+/**
+ * All settlements containing a perPerson row for the given player.
+ * Admin-only: settlements collection requires admin auth in Firestore Rules.
+ * N+1 reads (one per settlement) — acceptable for small clubs (~24 settlements).
+ */
+export async function getSettlementsForPlayer(playerName: string): Promise<PlayerSettlementRow[]> {
+  const all = await getAllSettlements();
+  const results: PlayerSettlementRow[] = [];
+  for (const s of all) {
+    const full = await getSettlement(s.year, s.month);
+    if (!full) continue;
+    const row = full.perPerson.find((p) => p.name === playerName);
+    if (row) {
+      results.push({ year: full.year, month: full.month, monthName: full.monthName, count: row.count, amount: row.amount });
+    }
+  }
+  return results.sort((a, b) => (b.year - a.year) || (b.month - a.month));
+}
+
 /** "1234 Ft" / 1234 / "1234.5" → 1234.5 */
 function parseNumberLikeHuf(v: unknown): number {
   if (typeof v === 'number') return v;
@@ -555,4 +583,87 @@ export async function pingFirestore(): Promise<boolean> {
 export async function getAttendanceForDate(date: string): Promise<string[]> {
   const map = await getAttendeesByDates([date]);
   return map.get(date) ?? [];
+}
+
+// ─────────────────────────────────────────────────────────────────
+// Önregisztráció
+// ─────────────────────────────────────────────────────────────────
+
+/** Visszaadja a tagot az email alapján, vagy null-t ha nincs találat. */
+export async function getMemberByEmail(email: string): Promise<Member | null> {
+  const snap = await getDocs(
+    query(collection(db, COLLECTIONS.MEMBERS), where('email', '==', email.toLowerCase())),
+  );
+  if (snap.empty) return null;
+  const d = snap.docs[0];
+  const data = d.data();
+  return { id: d.id, name: (data.name ?? '').toString(), email: (data.email ?? '').toString(), active: data.active !== false };
+}
+
+/**
+ * Egy adott név + dátum összes 'Yes' jelenléti rekordját törli a Firestore-ból.
+ * Ha több duplikátum van, mindet kitörli. Visszaadja a törölt rekordok számát.
+ */
+export async function deleteAttendanceForPlayerOnDate(name: string, eventDate: string): Promise<number> {
+  const q = query(
+    collection(db, COLLECTIONS.ATTENDANCE),
+    where('name', '==', name),
+    where('event_date', '==', eventDate),
+  );
+  const snap = await getDocs(q);
+  let count = 0;
+  // batched delete (Firestore max 500 / batch — bőven elég itt)
+  const batch = writeBatch(db);
+  snap.forEach((d) => {
+    const data = d.data();
+    if ((data.status ?? '') === 'Yes') {
+      batch.delete(d.ref);
+      count++;
+    }
+  });
+  if (count > 0) await batch.commit();
+  return count;
+}
+
+/** Létrehozza vagy frissíti a saját jelenléti rekordot. */
+export async function upsertSelfRegistration(name: string, eventDate: string, status: 'Yes' | 'No'): Promise<void> {
+  const q = query(
+    collection(db, COLLECTIONS.ATTENDANCE),
+    where('name', '==', name),
+    where('event_date', '==', eventDate),
+  );
+  const snap = await getDocs(q);
+  if (!snap.empty) {
+    await updateDoc(snap.docs[0].ref, { status, timestamp: serverTimestamp() });
+  } else {
+    await addDoc(collection(db, COLLECTIONS.ATTENDANCE), {
+      name, status, event_date: eventDate, mode: 'valós', timestamp: serverTimestamp(),
+    });
+  }
+}
+
+// ─────────────────────────────────────────────────────────────────
+// App konfiguráció (email beállítások stb.)
+// ─────────────────────────────────────────────────────────────────
+
+export interface AppConfig {
+  senderName: string;
+  emailFooter: string;
+}
+
+const APP_CONFIG_DOC_ID = 'email_settings';
+
+export async function getAppConfig(): Promise<AppConfig> {
+  const snap = await getDoc(doc(db, COLLECTIONS.APP_CONFIG, APP_CONFIG_DOC_ID));
+  if (!snap.exists()) return { senderName: '', emailFooter: '' };
+  const d = snap.data();
+  return { senderName: String(d.senderName ?? ''), emailFooter: String(d.emailFooter ?? '') };
+}
+
+export async function saveAppConfig(config: AppConfig): Promise<void> {
+  await setDoc(doc(db, COLLECTIONS.APP_CONFIG, APP_CONFIG_DOC_ID), {
+    senderName: config.senderName,
+    emailFooter: config.emailFooter,
+    updated_at: serverTimestamp(),
+  });
 }

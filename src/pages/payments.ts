@@ -10,6 +10,7 @@
 
 import { renderHeader } from '../components/header';
 import { getAuthState, onAuthChange, signIn } from '../lib/auth';
+import { logEvent } from '../lib/logger';
 import {
   getAllSettlements,
   getAllInvoices,
@@ -554,6 +555,7 @@ function attachHandlers(container: HTMLElement, state: PayState) {
       } else {
         state.csvParseError = null;
         state.csvTransactions = result.transactions;
+        void logEvent('info', 'CSV imported', { filename: file.name, count: result.transactions.length });
         if (state.loadedSettlement) {
           runMatching(state);
         }
@@ -617,6 +619,7 @@ function attachHandlers(container: HTMLElement, state: PayState) {
     }
     try {
       await addNameMapping(rev, sys);
+      void logEvent('info', 'Name mapping added', { revolutName: rev, systemName: sys });
       state.mappings = await getAllNameMappings();
       state.newRevName = '';
       state.newSysName = '';

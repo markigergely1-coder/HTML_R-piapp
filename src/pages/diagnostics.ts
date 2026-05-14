@@ -14,6 +14,9 @@ interface DiagState {
   testing: boolean;
   testResult: { ok: boolean; msg: string } | null;
   levelFilter: 'all' | 'INFO' | 'WARNING' | 'ERROR';
+  emailTestRecipient: string;
+  emailTesting: boolean;
+  emailTestResult: { ok: boolean; msg: string } | null;
 }
 
 // ─────────────────────────────────────────────────────────────────
@@ -39,6 +42,9 @@ export async function renderDiagnosticsPage(container: HTMLElement): Promise<voi
     testing: false,
     testResult: null,
     levelFilter: 'all',
+    emailTestRecipient: getAuthState().user?.email ?? '',
+    emailTesting: false,
+    emailTestResult: null,
   };
   rerender(container, state);
 
@@ -119,6 +125,7 @@ function renderBody(state: DiagState): string {
       <aside class="lg:sticky lg:top-[110px] space-y-3 px-5 pt-5 lg:px-0 lg:pt-0">
         ${renderConnectionsCard(state)}
         ${renderAuthCard()}
+        ${renderEmailTestCard(state)}
       </aside>
 
       <!-- Logok -->
@@ -176,6 +183,38 @@ function renderAuthCard(): string {
           <span class="font-semibold ${auth.isAdmin ? 'text-[color:#047857]' : 'text-[color:var(--fg-2)]'}">${auth.isAdmin ? '✓ Igen' : '✗ Nem'}</span>
         </li>
       </ul>
+    </div>`;
+}
+
+function renderEmailTestCard(state: DiagState): string {
+  const resultBlock = state.emailTestResult
+    ? `<div class="mt-3 px-3 py-2 rounded-xl text-[12px] font-semibold"
+          style="background:${state.emailTestResult.ok ? 'color-mix(in oklab,#10b981 14%,transparent)' : 'color-mix(in oklab,var(--accent) 14%,transparent)'};color:${state.emailTestResult.ok ? '#047857' : 'var(--accent-ink)'}">
+        ${state.emailTestResult.ok ? '✓' : '✗'} ${eh(state.emailTestResult.msg)}
+      </div>`
+    : '';
+  return `
+    <div class="card p-4 fade-up">
+      <div class="flex items-center gap-2 mb-3">
+        <span class="text-xl">📧</span>
+        <div>
+          <p class="eyebrow text-[10px]">Email</p>
+          <p class="text-[15px] font-semibold text-fg-1">Teszt email</p>
+        </div>
+      </div>
+      <p class="text-[12px] text-fg-3 mb-3">Elküld egy teszt elszámolás emailt a megadott címre.</p>
+      <input id="email-test-recipient" type="email"
+        class="w-full px-3 py-2 rounded-xl border text-[13px] text-fg-1 focus:outline-none mb-2"
+        style="background:var(--bg-elev);border-color:var(--line-strong)"
+        value="${eh(state.emailTestRecipient)}"
+        placeholder="email@example.com" />
+      <button id="email-test-btn"
+        class="w-full px-4 py-2.5 rounded-full text-[13px] font-semibold transition-colors ${state.emailTesting ? 'opacity-60 cursor-not-allowed' : ''}"
+        style="background:color-mix(in oklab,#0ea5e9 14%,transparent);color:#0369a1"
+        ${state.emailTesting ? 'disabled' : ''}>
+        ${state.emailTesting ? 'Küldés…' : 'Teszt küldése'}
+      </button>
+      ${resultBlock}
     </div>`;
 }
 
@@ -274,6 +313,35 @@ function attachHandlers(container: HTMLElement, state: DiagState) {
         rerender(container, state);
       }
     });
+  });
+
+  container.querySelector<HTMLInputElement>('#email-test-recipient')?.addEventListener('input', (e) => {
+    state.emailTestRecipient = (e.target as HTMLInputElement).value;
+  });
+
+  container.querySelector<HTMLButtonElement>('#email-test-btn')?.addEventListener('click', async () => {
+    if (state.emailTesting) return;
+    const to = state.emailTestRecipient.trim();
+    if (!to) return;
+    state.emailTesting = true;
+    state.emailTestResult = null;
+    rerender(container, state);
+    try {
+      const { sendBillingEmails } = await import('../lib/email');
+      const now = new Date();
+      const result = await sendBillingEmails({
+        year: now.getFullYear(),
+        monthName: 'Teszt hónap',
+        personal: [{ to, name: 'Teszt felhasználó', count: 3, amount: 6900 }],
+      });
+      const ok = result.personalSent > 0;
+      state.emailTestResult = { ok, msg: ok ? `Email elküldve: ${to}` : `Küldés sikertelen: ${result.personalFailed[0]?.reason ?? 'ismeretlen hiba'}` };
+    } catch (e) {
+      state.emailTestResult = { ok: false, msg: String(e) };
+    } finally {
+      state.emailTesting = false;
+      rerender(container, state);
+    }
   });
 }
 

@@ -2,6 +2,11 @@ import './style.css';
 import { startRouter } from './router';
 import { maybeShowInAppBanner } from './lib/inappBrowser';
 import { setupPwa } from './lib/pwa';
+import { applyTheme, watchSystemTheme } from './lib/theme';
+
+// Téma alkalmazása MIELŐTT bármi renderelődne (villanás-mentes initial paint)
+applyTheme();
+watchSystemTheme();
 
 const app = document.querySelector<HTMLDivElement>('#app')!;
 startRouter(app);

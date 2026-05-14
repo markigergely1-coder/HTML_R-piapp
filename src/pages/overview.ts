@@ -16,8 +16,13 @@ import {
 import {
   getAttendeesByDates,
   getCancelledSessions,
+  getMemberByEmail,
+  upsertSelfRegistration,
+  deleteAttendanceForPlayerOnDate,
   type CancelledSession,
+  type Member,
 } from '../lib/firestore';
+import { getAuthState } from '../lib/auth';
 import { getInitials } from '../lib/avatar';
 import { renderHeader } from '../components/header';
 
@@ -27,6 +32,11 @@ interface OverviewState {
   selected: string;
   attendeesByDate: Map<string, string[]>;
   cancelled: Map<string, CancelledSession>;
+  selfMember: Member | null;
+  selfRegistering: boolean;
+  editMode: boolean;
+  pendingDelete: { name: string; date: string } | null;
+  deleting: boolean;
 }
 
 // ─── Belépési pont ───
@@ -35,9 +45,11 @@ export async function renderOverviewPage(container: HTMLElement): Promise<void> 
 
   // Csak múltbeli (és kedd 21:00 után aznapi) alkalmak.
   const dates = pastTuesdaysForDisplay(9);
-  const [attendeesByDate, cancelled] = await Promise.all([
+  const authState = getAuthState();
+  const [attendeesByDate, cancelled, selfMember] = await Promise.all([
     getAttendeesByDates(dates),
     getCancelledSessions(),
+    authState.user?.email ? getMemberByEmail(authState.user.email) : Promise.resolve(null),
   ]);
   // A legutóbbi alkalom van alapból kiválasztva.
   const mostRecent = dates[dates.length - 1] ?? '';
@@ -48,10 +60,18 @@ export async function renderOverviewPage(container: HTMLElement): Promise<void> 
     selected: mostRecent,
     attendeesByDate,
     cancelled,
+    selfMember,
+    selfRegistering: false,
+    editMode: false,
+    pendingDelete: null,
+    deleting: false,
   };
 
   container.innerHTML = renderShell(state);
   attachHandlers(container, state);
+
+  // Ha az auth állapot megváltozik (bejelentkezés / kijelentkezés) a router már
+  // újra-renderi az oldalt — nem kell itt külön kezelni.
 }
 
 // ─── Loading ───
@@ -95,6 +115,7 @@ function renderShell(state: OverviewState): string {
           ${renderDateRail(state)}
         </div>
       </div>
+      ${renderDeleteConfirmModal(state)}
     </div>`;
 }
 
@@ -170,6 +191,7 @@ function renderHero(state: OverviewState): string {
             </div>
           </div>
           ${countSection}
+          ${!isCancelled && !isPast && state.selfMember ? renderSelfRegButton(state) : ''}
         </div>
       </div>
     </section>`;
@@ -314,14 +336,33 @@ function renderResult(state: OverviewState): string {
   }
   const attendees = state.attendeesByDate.get(state.selected) ?? [];
   if (attendees.length === 0) return renderEmptyCard(state.selected);
-  return renderAttendeesSection(attendees);
+  return renderAttendeesSection(attendees, state);
 }
 
-function renderAttendeesSection(attendees: string[]): string {
+function renderAttendeesSection(attendees: string[], state: OverviewState): string {
+  const editing = state.editMode;
   const cards = attendees.map((name) => {
     const hue = avatarHue(name);
     const initials = getInitials(name);
     const profileHref = `#/profile?name=${encodeURIComponent(name)}`;
+
+    if (editing) {
+      // Szerkesztés mód: nem link, hanem button — kattintás megnyitja a delete dialog-ot
+      return `
+        <button type="button"
+          data-action="remove-attendee" data-name="${ea(name)}"
+          class="attendee-edit card relative flex items-center gap-2.5 px-3 py-2.5 transition-transform"
+          style="border-radius:16px;color:inherit;text-align:left;border:1px solid var(--accent);animation:jiggle 0.6s ease-in-out infinite alternate">
+          <span aria-hidden="true"
+            class="absolute -top-1.5 -right-1.5 w-5 h-5 rounded-full flex items-center justify-center flex-shrink-0 text-white text-[12px] font-bold shadow-md"
+            style="background:var(--accent);line-height:1">×</span>
+          <div class="rounded-full flex items-center justify-center flex-shrink-0 font-semibold text-[10px]"
+               style="width:28px;height:28px;flex-shrink:0;background:linear-gradient(135deg,hsl(${hue} 80% 88%) 0%,hsl(${(hue+30)%360} 75% 78%) 100%);color:hsl(${hue} 60% 30%)">
+            ${eh(initials)}
+          </div>
+          <span class="text-[12.5px] font-medium text-fg-1 break-words leading-tight">${eh(name)}</span>
+        </button>`;
+    }
 
     return `
       <a href="${profileHref}"
@@ -336,14 +377,69 @@ function renderAttendeesSection(attendees: string[]): string {
       </a>`;
   }).join('');
 
+  const editBtn = `
+    <button id="attendees-edit-toggle" type="button"
+      class="text-[11px] font-semibold px-2.5 py-1 rounded-full transition-colors"
+      style="background:${editing ? 'var(--accent)' : 'var(--bg-elev)'};color:${editing ? '#fff' : 'var(--fg-2)'};border:1px solid ${editing ? 'var(--accent)' : 'var(--line)'}">
+      ${editing ? 'Kész' : 'Szerkesztés'}
+    </button>`;
+
   return `
     <div class="fade-up" style="animation-delay:80ms">
-      <div class="flex items-end justify-between mb-3">
+      <div class="flex items-end justify-between mb-3 gap-2">
         <h2 class="text-[20px] font-semibold tracking-tight text-fg-1">Résztvevők</h2>
-        <span class="eyebrow">${attendees.length} fő</span>
+        <div class="flex items-center gap-2">
+          <span class="eyebrow">${attendees.length} fő</span>
+          ${editBtn}
+        </div>
       </div>
       <div id="attendees-grid" class="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-2.5">
         ${cards}
+      </div>
+    </div>`;
+}
+
+function renderDeleteConfirmModal(state: OverviewState): string {
+  if (!state.pendingDelete) return '';
+  const { name, date } = state.pendingDelete;
+  const dateLabel = formatDateHuLong(date);
+  return `
+    <div id="delete-confirm-overlay"
+      class="fixed inset-0 z-50 flex items-center justify-center px-5 fade-up"
+      style="background:rgba(15,12,10,0.45);backdrop-filter:blur(10px) saturate(140%);-webkit-backdrop-filter:blur(10px) saturate(140%);animation-duration:160ms">
+      <div role="dialog" aria-modal="true" aria-labelledby="delete-confirm-title"
+        class="card relative overflow-hidden noise"
+        style="border-radius:24px;max-width:380px;width:100%;box-shadow:var(--shadow-lg);border:1px solid var(--line-strong)">
+        <div class="relative p-6">
+          <div class="w-14 h-14 mx-auto mb-4 rounded-full flex items-center justify-center"
+            style="background:color-mix(in oklab,var(--accent) 14%,transparent)">
+            <svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="var(--accent)" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M3 6h18M8 6V4a2 2 0 012-2h4a2 2 0 012 2v2M6 6l1 14a2 2 0 002 2h6a2 2 0 002-2l1-14"/>
+              <line x1="10" y1="11" x2="10" y2="17"/><line x1="14" y1="11" x2="14" y2="17"/>
+            </svg>
+          </div>
+          <h3 id="delete-confirm-title" class="text-[17px] font-semibold text-fg-1 text-center mb-2">
+            Játékos törlése?
+          </h3>
+          <p class="text-[13px] text-fg-2 text-center leading-relaxed mb-1">
+            Biztosan törlöd <span class="font-semibold text-fg-1">${eh(name)}</span> jelenlétét erről az alkalomról:
+          </p>
+          <p class="text-[13px] text-fg-1 font-semibold text-center mb-5 font-mono-tnum">${eh(dateLabel)}</p>
+          <div class="flex flex-col gap-2">
+            <button id="delete-confirm-yes" type="button"
+              class="w-full px-4 py-2.5 rounded-full text-white text-[14px] font-semibold transition-colors ${state.deleting ? 'opacity-60 cursor-not-allowed' : ''}"
+              style="background:var(--accent)"
+              ${state.deleting ? 'disabled' : ''}>
+              ${state.deleting ? 'Törlés…' : 'Igen, törlés'}
+            </button>
+            <button id="delete-confirm-no" type="button"
+              class="w-full px-4 py-2.5 rounded-full text-[14px] font-semibold transition-colors"
+              style="background:var(--bg-elev);color:var(--fg-1);border:1px solid var(--line-strong)"
+              ${state.deleting ? 'disabled' : ''}>
+              Mégse
+            </button>
+          </div>
+        </div>
       </div>
     </div>`;
 }
@@ -395,6 +491,31 @@ function renderCancelledCard(date: string, info?: CancelledSession): string {
         </div>
       </div>
     </div>`;
+}
+
+// ─── Önregisztráció gomb ───
+function renderSelfRegButton(state: OverviewState): string {
+  if (!state.selfMember) return '';
+  if (state.selfRegistering) {
+    return `
+      <div class="mt-3 flex items-center gap-2 px-3 py-2">
+        <div class="w-4 h-4 rounded-full border-2 animate-spin flex-shrink-0" style="border-color:var(--accent) var(--line) var(--line) var(--line)"></div>
+        <span class="text-[12px] text-fg-3">Mentés…</span>
+      </div>`;
+  }
+  const isGoing = (state.attendeesByDate.get(state.selected) ?? []).includes(state.selfMember.name);
+  if (isGoing) {
+    return `
+      <button id="self-reg-btn" class="mt-3 w-full py-2.5 rounded-2xl text-[13px] font-semibold transition-colors"
+        style="border:1.5px solid var(--accent);color:var(--accent-ink);background:color-mix(in oklab,var(--accent) 8%,transparent)">
+        ✓ Megyek — visszavonás
+      </button>`;
+  }
+  return `
+    <button id="self-reg-btn" class="mt-3 w-full py-2.5 rounded-2xl text-[13px] font-semibold text-white transition-colors"
+      style="background:var(--accent)">
+      Megyek →
+    </button>`;
 }
 
 // ─── Volleyball art SVG ───
@@ -465,6 +586,93 @@ function attachHandlers(container: HTMLElement, state: OverviewState) {
     const target = (e.target as HTMLElement).closest<HTMLButtonElement>('.date-rail-btn');
     if (!target || target.getAttribute('aria-disabled') === 'true') return;
     if (target.dataset.date) selectDate(target.dataset.date);
+  });
+
+  // Szerkesztés mód toggle
+  container.querySelector<HTMLButtonElement>('#attendees-edit-toggle')?.addEventListener('click', () => {
+    state.editMode = !state.editMode;
+    const resultEl = container.querySelector<HTMLElement>('#result-main');
+    if (resultEl) resultEl.innerHTML = renderResult(state);
+    attachHandlers(container, state);
+  });
+
+  // Résztvevő kattintás szerkesztés módban — delete dialog megnyitása
+  container.querySelectorAll<HTMLButtonElement>('[data-action="remove-attendee"]').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      const name = btn.dataset.name;
+      if (!name) return;
+      state.pendingDelete = { name, date: state.selected };
+      container.querySelector<HTMLElement>('#delete-confirm-overlay')?.remove();
+      const device = container.querySelector<HTMLElement>('.device');
+      if (device) device.insertAdjacentHTML('beforeend', renderDeleteConfirmModal(state));
+      attachHandlers(container, state);
+    });
+  });
+
+  // Modal: Igen (törlés)
+  container.querySelector<HTMLButtonElement>('#delete-confirm-yes')?.addEventListener('click', async () => {
+    if (!state.pendingDelete || state.deleting) return;
+    const { name, date } = state.pendingDelete;
+    state.deleting = true;
+    // re-render only the modal
+    const overlay = container.querySelector<HTMLElement>('#delete-confirm-overlay');
+    if (overlay) overlay.outerHTML = renderDeleteConfirmModal(state);
+    attachHandlers(container, state);
+    try {
+      await deleteAttendanceForPlayerOnDate(name, date);
+      // Firestore frissítés — újra le kell kérni az aznapi névsort
+      const fresh = await getAttendeesByDates([date]);
+      state.attendeesByDate.set(date, fresh.get(date) ?? []);
+    } catch (err) {
+      console.warn('[overview] Delete failed:', err);
+    } finally {
+      state.deleting = false;
+      state.pendingDelete = null;
+      // Teljes újra-render — kártyák, hero count, dátum-rail mind frissül
+      const heroWrapper = container.querySelector<HTMLElement>('#hero-wrapper');
+      if (heroWrapper) heroWrapper.innerHTML = renderHero(state);
+      const resultEl = container.querySelector<HTMLElement>('#result-main');
+      if (resultEl) resultEl.innerHTML = renderResult(state);
+      const rail = container.querySelector<HTMLElement>('#date-rail');
+      if (rail) rail.innerHTML = renderDateRailItems(state);
+      const scroller2 = container.querySelector<HTMLElement>('#date-scroller');
+      if (scroller2) scroller2.innerHTML = state.dates.map((d) => renderDateChip(d, state)).join('');
+      const overlay2 = container.querySelector<HTMLElement>('#delete-confirm-overlay');
+      if (overlay2) overlay2.remove();
+      attachHandlers(container, state);
+    }
+  });
+
+  // Modal: Mégse / overlay-re kattintás
+  const closeModal = () => {
+    if (state.deleting) return;
+    state.pendingDelete = null;
+    const overlay = container.querySelector<HTMLElement>('#delete-confirm-overlay');
+    if (overlay) overlay.remove();
+  };
+  container.querySelector<HTMLButtonElement>('#delete-confirm-no')?.addEventListener('click', closeModal);
+  container.querySelector<HTMLElement>('#delete-confirm-overlay')?.addEventListener('click', (e) => {
+    if ((e.target as HTMLElement).id === 'delete-confirm-overlay') closeModal();
+  });
+
+  // Önregisztráció
+  container.querySelector<HTMLButtonElement>('#self-reg-btn')?.addEventListener('click', async () => {
+    if (!state.selfMember || state.selfRegistering) return;
+    const heroWrapper = container.querySelector<HTMLElement>('#hero-wrapper')!;
+    const isGoing = (state.attendeesByDate.get(state.selected) ?? []).includes(state.selfMember.name);
+    state.selfRegistering = true;
+    heroWrapper.innerHTML = renderHero(state);
+    try {
+      await upsertSelfRegistration(state.selfMember.name, state.selected, isGoing ? 'No' : 'Yes');
+      // Frissített jelenlétek lekérése
+      const fresh = await getAttendeesByDates([state.selected]);
+      state.attendeesByDate.set(state.selected, fresh.get(state.selected) ?? []);
+    } finally {
+      state.selfRegistering = false;
+    }
+    heroWrapper.innerHTML = renderHero(state);
+    attachHandlers(container, state);
+    container.querySelector<HTMLElement>('#result-main')!.innerHTML = renderResult(state);
   });
 }
 

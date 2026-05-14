@@ -19,6 +19,16 @@ service cloud.firestore {
     match /attendance_records/{doc} {
       allow read: if true;
       allow write: if isAdmin();
+      // Önregisztráció: bejelentkezett, email-ellenőrzött tag hozhat létre/módosíthat rekordot
+      allow create: if request.auth != null
+        && request.auth.token.email_verified == true
+        && request.resource.data.mode == 'valós'
+        && request.resource.data.name is string;
+      allow update: if request.auth != null
+        && request.auth.token.email_verified == true;
+      // Résztvevő törlés az Alkalmak oldalról — mindenki (bejelentkezés nélkül is)
+      // megteheti, mert kis bizalmi csoport (kis röplabda csapat).
+      allow delete: if true;
     }
     match /cancelled_sessions/{doc} {
       allow read: if true;
@@ -41,12 +51,17 @@ service cloud.firestore {
       allow read, write: if isAdmin();
     }
     match /app_logs/{doc} {
-      allow read, write: if isAdmin();
+      allow read: if isAdmin();
+      allow create: if request.auth != null && request.auth.token.email_verified == true;
+      allow update, delete: if isAdmin();
     }
     match /revolut_name_mapping/{doc} {
       allow read, write: if isAdmin();
     }
     match /test_ping/{doc} {
+      allow read, write: if isAdmin();
+    }
+    match /app_config/{doc} {
       allow read, write: if isAdmin();
     }
 

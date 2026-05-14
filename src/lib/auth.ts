@@ -18,6 +18,7 @@ import {
   type User,
 } from 'firebase/auth';
 import { auth, googleProvider } from './firebase';
+import { logEvent } from './logger';
 
 /** Admin email-ek — szinkronban a Streamlit secrets-szel. */
 export const ADMIN_EMAILS = [
@@ -36,11 +37,13 @@ const listeners = new Set<(state: AuthState) => void>();
 
 onAuthStateChanged(auth, (user) => {
   const email = user?.email?.toLowerCase() ?? '';
+  const wasLoggedOut = !currentState.user && !currentState.loading;
   currentState = {
     user,
     isAdmin: !!user && ADMIN_EMAILS.includes(email),
     loading: false,
   };
+  if (user && wasLoggedOut) void logEvent('info', 'User signed in', { email: user.email });
   for (const l of listeners) l(currentState);
 });
 

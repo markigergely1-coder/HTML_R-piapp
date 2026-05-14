@@ -9,6 +9,7 @@
 
 import { renderHeader } from '../components/header';
 import { getAuthState, onAuthChange, signIn } from '../lib/auth';
+import { logEvent } from '../lib/logger';
 import { getInitials } from '../lib/avatar';
 import {
   getAllMembers,
@@ -415,6 +416,7 @@ function attachBodyHandlers(container: HTMLElement, state: MembersState) {
     }
     try {
       await addMember({ name, email, active });
+      void logEvent('info', 'Member added', { name, email });
       state.members = await getAllMembers();
       state.addOpen = false;
       state.toast = { kind: 'success', msg: `✓ ${name} hozzáadva` };
@@ -459,6 +461,7 @@ function attachBodyHandlers(container: HTMLElement, state: MembersState) {
       if (!confirm(`Biztosan törlöd?\n\n${m.name} (${m.email})`)) return;
       try {
         await deleteMember(id);
+        void logEvent('warn', 'Member deleted', { name: m.name, email: m.email });
         state.members = state.members.filter((x) => x.id !== id);
         state.toast = { kind: 'success', msg: `🗑️ ${m.name} törölve` };
         rerender(container, state);
@@ -487,6 +490,7 @@ function attachBodyHandlers(container: HTMLElement, state: MembersState) {
       }
       try {
         await updateMember(id, { name, email, active });
+        void logEvent('info', 'Member updated', { id, name, email });
         const m = state.members.find((x) => x.id === id);
         if (m) { m.name = name; m.email = email; m.active = active; }
         state.editingId = null;
