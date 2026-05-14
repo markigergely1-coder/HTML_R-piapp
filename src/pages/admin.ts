@@ -52,7 +52,7 @@ let toastTimer: number | null = null;
 export async function renderAdminPage(container: HTMLElement): Promise<void> {
   container.innerHTML = renderShell(renderLoadingBody());
 
-  const dates = generateTuesdayDates(8, 2);
+  const dates = generateTuesdayDates(8, 1);
   const upcoming = upcomingTuesday(dates);
   const historicalAll = await getAllAttendanceRecords();
 
@@ -148,6 +148,12 @@ function relativeLabel(iso: string): string | null {
   return null;
 }
 
+// Dátum-választó szín (smaragdzöld, eltér a brand pirostól a CTA-k kontrasztja érdekében)
+const DP_COLOR      = '#059669';                                  // emerald-600
+const DP_COLOR_DARK = '#047857';                                  // emerald-700 (kontrasztosabb szöveg)
+const DP_TINT_HOVER = 'color-mix(in oklab, #059669 10%, transparent)'; // halvány hover
+const DP_TINT_SOFT  = 'color-mix(in oklab, #059669 14%, transparent)'; // kicsit erősebb (relative pill)
+
 function renderDatePicker(state: AdminState): string {
   const sortedDates = state.dates.slice().sort((a, b) => b.localeCompare(a)); // legújabb fent
   const open = state.dateMenuOpen;
@@ -169,12 +175,13 @@ function renderDatePicker(state: AdminState): string {
     const rel = relativeLabel(d);
     const relPill = rel
       ? `<span class="text-[10px] font-semibold px-1.5 py-0.5 rounded-full flex-shrink-0"
-            style="background:${isSel ? 'rgba(255,255,255,0.18)' : 'color-mix(in oklab,var(--accent) 14%,transparent)'};color:${isSel ? '#fff' : 'var(--accent-ink)'}">${rel}</span>`
+            style="background:${isSel ? 'rgba(255,255,255,0.18)' : DP_TINT_SOFT};color:${isSel ? '#fff' : DP_COLOR_DARK}">${rel}</span>`
       : '';
     return `
       <button type="button" data-date-pick="${d}"
         class="admin-date-row w-full flex items-center gap-3 px-3.5 py-2.5 text-left transition-colors"
-        style="background:${isSel ? 'var(--accent)' : 'transparent'};color:${isSel ? '#fff' : 'inherit'};${isSel ? '' : 'border-top:1px solid var(--line);'}">
+        data-selected="${isSel ? '1' : '0'}"
+        style="background:${isSel ? DP_COLOR : 'transparent'};color:${isSel ? '#fff' : 'inherit'};${isSel ? '' : 'border-top:1px solid var(--line);'}">
         <div class="flex flex-col items-center flex-shrink-0" style="min-width:34px">
           <span class="text-[9px] font-semibold uppercase tracking-widest"
                 style="color:${isSel ? 'rgba(255,255,255,0.85)' : 'var(--fg-3)'}">${month}</span>
@@ -195,17 +202,17 @@ function renderDatePicker(state: AdminState): string {
       <span class="eyebrow mb-1.5 block">Dátum</span>
       <button id="admin-date-trigger" type="button" aria-expanded="${open ? 'true' : 'false'}"
         class="card w-full flex items-center gap-3 px-3.5 py-3 transition-colors hover:bg-[color:var(--bg-elev)]"
-        style="border-radius:14px;border-color:${open ? 'var(--accent)' : 'var(--line-strong)'}">
+        style="border-radius:14px;border-color:${open ? DP_COLOR : 'var(--line-strong)'}">
         <div class="rounded-xl flex items-center justify-center flex-shrink-0"
-             style="width:42px;height:42px;background:color-mix(in oklab,var(--accent) 12%,transparent)">
+             style="width:42px;height:42px;background:${DP_TINT_SOFT}">
           <div class="flex flex-col items-center leading-none">
-            <span class="text-[7px] font-bold uppercase tracking-widest" style="color:var(--accent-ink)">${selMonth}</span>
-            <span class="font-mono-tnum font-bold text-[16px] mt-0.5" style="color:var(--accent-ink)">${selDay}</span>
+            <span class="text-[7px] font-bold uppercase tracking-widest" style="color:${DP_COLOR_DARK}">${selMonth}</span>
+            <span class="font-mono-tnum font-bold text-[16px] mt-0.5" style="color:${DP_COLOR_DARK}">${selDay}</span>
           </div>
         </div>
         <div class="flex-1 min-w-0 text-left">
           <p class="text-[14px] font-semibold text-fg-1 truncate">${eh(fullLabel)}</p>
-          ${relSel ? `<p class="text-[11px] font-medium mt-0.5" style="color:var(--accent-ink)">${relSel}</p>` : `<p class="text-[11px] text-fg-3 mt-0.5">Válassz másikat ha kell</p>`}
+          ${relSel ? `<p class="text-[11px] font-medium mt-0.5" style="color:${DP_COLOR_DARK}">${relSel}</p>` : `<p class="text-[11px] text-fg-3 mt-0.5">Válassz másikat ha kell</p>`}
         </div>
         <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"
              style="color:var(--fg-3);flex:none;transition:transform 200ms;transform:rotate(${open ? '180deg' : '0deg'})">
@@ -215,6 +222,9 @@ function renderDatePicker(state: AdminState): string {
       </button>
 
       ${open ? `
+        <style>
+          .admin-date-row[data-selected="0"]:hover { background: ${DP_TINT_HOVER} !important; }
+        </style>
         <div id="admin-date-menu"
           class="card overflow-hidden"
           style="position:absolute;top:calc(100% + 6px);left:0;right:0;border-radius:14px;box-shadow:var(--shadow-lg);max-height:340px;overflow-y:auto;animation:fadeUp 160ms ease both">
