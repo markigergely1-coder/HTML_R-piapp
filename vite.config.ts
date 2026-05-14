@@ -18,7 +18,7 @@ export default defineConfig({
         name: 'Röpi App Pro',
         short_name: 'Röpi',
         description: 'Röplabda jelenlét, elszámolás és tagság-kezelés egy app-ban.',
-        theme_color: '#ef4444',
+        theme_color: '#059669',
         background_color: '#ffffff',
         display: 'standalone',
         orientation: 'portrait',
