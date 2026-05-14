@@ -14,6 +14,9 @@ import {
   generateTuesdayDates,
   upcomingTuesday,
   formatDateHuLong,
+  formatMonthShortHu,
+  dayOf,
+  todayInHungary,
 } from '../lib/dates';
 import {
   addAttendanceBatch,
@@ -32,6 +35,7 @@ interface AdminState {
   step: 1 | 2 | 3;
   date: string;
   dates: string[];
+  dateMenuOpen: boolean;
   entries: Map<string, AdminEntry>;
   toast: { kind: 'success' | 'error'; msg: string } | null;
   saving: boolean;
@@ -61,6 +65,7 @@ export async function renderAdminPage(container: HTMLElement): Promise<void> {
     step: 1,
     date: upcoming,
     dates,
+    dateMenuOpen: false,
     entries,
     toast: null,
     saving: false,
@@ -125,12 +130,102 @@ function renderStepBar(state: AdminState): string {
     </div>`;
 }
 
+// ─── Custom dátum-választó (elegáns dropdown) ───
+function diffDays(iso: string): number {
+  const today = todayInHungary();
+  const a = new Date(today + 'T12:00:00Z').getTime();
+  const b = new Date(iso + 'T12:00:00Z').getTime();
+  return Math.round((b - a) / 86400000);
+}
+
+function relativeLabel(iso: string): string | null {
+  const d = diffDays(iso);
+  if (d === 0)  return 'Ma';
+  if (d === 1)  return 'Holnap';
+  if (d === -1) return 'Tegnap';
+  if (d > 1   && d <= 14) return `${d} nap múlva`;
+  if (d < -1  && d >= -14) return `${-d} napja`;
+  return null;
+}
+
+function renderDatePicker(state: AdminState): string {
+  const sortedDates = state.dates.slice().sort((a, b) => b.localeCompare(a)); // legújabb fent
+  const open = state.dateMenuOpen;
+  const sel = state.date;
+  const selDay = dayOf(sel);
+  const selMonth = formatMonthShortHu(sel);
+  const fullLabel = formatDateHuLong(sel);
+  const relSel = relativeLabel(sel);
+
+  const items = sortedDates.map((d) => {
+    const isSel = d === sel;
+    const day = dayOf(d);
+    const month = formatMonthShortHu(d);
+    const long = formatDateHuLong(d);
+    // long: "2026. május 26., kedd" → szétszedjük évre + napra
+    const parts = long.split(',');
+    const yearPart = parts[0]?.split('.')[0]?.trim() ?? '';
+    const weekday = parts[1]?.trim() ?? 'kedd';
+    const rel = relativeLabel(d);
+    const relPill = rel
+      ? `<span class="text-[10px] font-semibold px-1.5 py-0.5 rounded-full flex-shrink-0"
+            style="background:${isSel ? 'rgba(255,255,255,0.18)' : 'color-mix(in oklab,var(--accent) 14%,transparent)'};color:${isSel ? '#fff' : 'var(--accent-ink)'}">${rel}</span>`
+      : '';
+    return `
+      <button type="button" data-date-pick="${d}"
+        class="admin-date-row w-full flex items-center gap-3 px-3.5 py-2.5 text-left transition-colors"
+        style="background:${isSel ? 'var(--accent)' : 'transparent'};color:${isSel ? '#fff' : 'inherit'};${isSel ? '' : 'border-top:1px solid var(--line);'}">
+        <div class="flex flex-col items-center flex-shrink-0" style="min-width:34px">
+          <span class="text-[9px] font-semibold uppercase tracking-widest"
+                style="color:${isSel ? 'rgba(255,255,255,0.85)' : 'var(--fg-3)'}">${month}</span>
+          <span class="font-mono-tnum font-semibold text-[19px] leading-tight"
+                style="color:${isSel ? '#fff' : 'var(--fg-1)'}">${day}</span>
+        </div>
+        <div class="flex-1 min-w-0">
+          <p class="text-[12.5px] font-semibold leading-tight" style="color:${isSel ? '#fff' : 'var(--fg-1)'}">${weekday}</p>
+          <p class="text-[10.5px] font-mono-tnum mt-0.5" style="color:${isSel ? 'rgba(255,255,255,0.75)' : 'var(--fg-3)'}">${yearPart}</p>
+        </div>
+        ${relPill}
+        ${isSel ? `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" style="flex:none"><polyline points="20 6 9 17 4 12"/></svg>` : ''}
+      </button>`;
+  }).join('');
+
+  return `
+    <div id="admin-datepicker" class="relative fade-up" style="z-index:20">
+      <span class="eyebrow mb-1.5 block">Dátum</span>
+      <button id="admin-date-trigger" type="button" aria-expanded="${open ? 'true' : 'false'}"
+        class="card w-full flex items-center gap-3 px-3.5 py-3 transition-colors hover:bg-[color:var(--bg-elev)]"
+        style="border-radius:14px;border-color:${open ? 'var(--accent)' : 'var(--line-strong)'}">
+        <div class="rounded-xl flex items-center justify-center flex-shrink-0"
+             style="width:42px;height:42px;background:color-mix(in oklab,var(--accent) 12%,transparent)">
+          <div class="flex flex-col items-center leading-none">
+            <span class="text-[7px] font-bold uppercase tracking-widest" style="color:var(--accent-ink)">${selMonth}</span>
+            <span class="font-mono-tnum font-bold text-[16px] mt-0.5" style="color:var(--accent-ink)">${selDay}</span>
+          </div>
+        </div>
+        <div class="flex-1 min-w-0 text-left">
+          <p class="text-[14px] font-semibold text-fg-1 truncate">${eh(fullLabel)}</p>
+          ${relSel ? `<p class="text-[11px] font-medium mt-0.5" style="color:var(--accent-ink)">${relSel}</p>` : `<p class="text-[11px] text-fg-3 mt-0.5">Válassz másikat ha kell</p>`}
+        </div>
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"
+             style="color:var(--fg-3);flex:none;transition:transform 200ms;transform:rotate(${open ? '180deg' : '0deg'})">
+          <polyline points="6 9 12 15 18 9"/>
+        </svg>
+        <input type="hidden" id="admin-date-select" value="${sel}" />
+      </button>
+
+      ${open ? `
+        <div id="admin-date-menu"
+          class="card overflow-hidden"
+          style="position:absolute;top:calc(100% + 6px);left:0;right:0;border-radius:14px;box-shadow:var(--shadow-lg);max-height:340px;overflow-y:auto;animation:fadeUp 160ms ease both">
+          ${items}
+        </div>
+      ` : ''}
+    </div>`;
+}
+
 // ─── Step 1: jelenlét + vendég-szám ───
 function renderStep1(state: AdminState): string {
-  const dateOptions = state.dates.slice().reverse().map((d) =>
-    `<option value="${d}" ${d === state.date ? 'selected' : ''}>${eh(formatDateHuLong(d))}</option>`
-  ).join('');
-
   const presentCount = [...state.entries.values()].filter((e) => e.present).length;
   const totalGuestCount = [...state.entries.values()].filter((e) => e.present).reduce((s, e) => s + e.guestCount, 0);
 
@@ -155,15 +250,7 @@ function renderStep1(state: AdminState): string {
 
   return `
     <!-- Dátum választó -->
-    <div class="card p-4 fade-up">
-      <label class="block">
-        <span class="eyebrow mb-1.5 block">Dátum</span>
-        <select id="admin-date-select" class="select-native w-full rounded-[12px] border px-3 py-2.5 text-[14px] font-medium text-fg-1 focus:outline-none"
-          style="border-color:var(--line-strong);background:var(--bg-card)">
-          ${dateOptions}
-        </select>
-      </label>
-    </div>
+    ${renderDatePicker(state)}
 
     <!-- Statisztika sáv -->
     <div class="grid grid-cols-2 gap-2 fade-up">
@@ -390,6 +477,65 @@ function rerender(container: HTMLElement, state: AdminState) {
   }
 }
 
+/** Csak a dátum-pickert renderezi újra (nem zavarja a stats bar / row state-et). */
+function rerenderDatePicker(container: HTMLElement, state: AdminState) {
+  const dp = container.querySelector<HTMLElement>('#admin-datepicker');
+  if (!dp) return;
+  const tmp = document.createElement('div');
+  tmp.innerHTML = renderDatePicker(state);
+  const fresh = tmp.firstElementChild as HTMLElement | null;
+  if (!fresh) return;
+  dp.replaceWith(fresh);
+  attachDatePickerHandlers(container, state);
+}
+
+// Document-szintű listener-eket egy helyen tartjuk, hogy elkerüljük a duplikációt.
+let datePickerOutsideHandler: ((e: MouseEvent) => void) | null = null;
+let datePickerKeyHandler: ((e: KeyboardEvent) => void) | null = null;
+
+function attachDatePickerHandlers(container: HTMLElement, state: AdminState) {
+  // Korábbi document listenerek leszedése (mindig, hogy ne halmozódjon)
+  if (datePickerOutsideHandler) document.removeEventListener('click', datePickerOutsideHandler);
+  if (datePickerKeyHandler)     document.removeEventListener('keydown', datePickerKeyHandler);
+  datePickerOutsideHandler = null;
+  datePickerKeyHandler = null;
+
+  const trigger = container.querySelector<HTMLButtonElement>('#admin-date-trigger');
+  trigger?.addEventListener('click', (e) => {
+    e.stopPropagation();
+    state.dateMenuOpen = !state.dateMenuOpen;
+    rerenderDatePicker(container, state);
+  });
+  container.querySelectorAll<HTMLButtonElement>('[data-date-pick]').forEach((btn) => {
+    btn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      const d = btn.dataset.datePick;
+      if (d) state.date = d;
+      state.dateMenuOpen = false;
+      rerenderDatePicker(container, state);
+    });
+  });
+
+  // Outside click + ESC — csak ha nyitva van a menü
+  if (state.dateMenuOpen) {
+    datePickerOutsideHandler = (e: MouseEvent) => {
+      const t = e.target as HTMLElement;
+      if (!t.closest('#admin-datepicker')) {
+        state.dateMenuOpen = false;
+        rerenderDatePicker(container, state);
+      }
+    };
+    datePickerKeyHandler = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        state.dateMenuOpen = false;
+        rerenderDatePicker(container, state);
+      }
+    };
+    document.addEventListener('click', datePickerOutsideHandler);
+    document.addEventListener('keydown', datePickerKeyHandler);
+  }
+}
+
 /**
  * In-place stats bar + "Tovább" gomb állapotának frissítése.
  * Sokkal kevésbé zavaró mint a teljes oldal-rerender minden stepper-kattintáskor.
@@ -414,11 +560,7 @@ function updateStatsAndNext(container: HTMLElement, state: AdminState) {
 }
 
 function attachHandlers(container: HTMLElement, state: AdminState) {
-  // Step 1
-  const dateSel = container.querySelector<HTMLSelectElement>('#admin-date-select');
-  dateSel?.addEventListener('change', () => {
-    state.date = dateSel.value;
-  });
+  attachDatePickerHandlers(container, state);
 
   // In-place stepper csere: csak az adott row stepper-jét cseréli + handler re-bind
   const replaceStepperInRow = (li: HTMLElement, entry: AdminEntry) => {
