@@ -20,6 +20,7 @@ import {
   setDoc,
 } from 'firebase/firestore';
 import { db } from './firebase';
+import { cached, invalidate, TTL } from './cache';
 
 export const COLLECTIONS = {
   ATTENDANCE: 'attendance_records',
@@ -105,24 +106,28 @@ export interface RawAttendance {
   mode: string;
 }
 
-/** Az ÖSSZES attendance record (csak a profil oldalhoz; teszt mód kihagyva). */
+/** Az ÖSSZES attendance record (database, yearly, admin Step 2; teszt mód kihagyva). */
 export async function getAllAttendanceRecords(): Promise<RawAttendance[]> {
-  const snap = await getDocs(collection(db, COLLECTIONS.ATTENDANCE));
-  const records: RawAttendance[] = [];
-  snap.forEach((doc) => {
-    const d = doc.data();
-    const mode = (d.mode ?? 'valós').toString().toLowerCase();
-    if (mode === 'teszt') return;
-    const name = (d.name ?? '').toString().trim();
-    if (!name) return;
-    records.push({
-      name,
-      status: (d.status ?? '').toString().trim(),
-      event_date: d.event_date ?? '',
-      mode,
+  // Rövid TTL (30 sec) — mert változik amikor self-reg vagy admin save történik;
+  // de tab-váltások közben gyors. Az írás-helpereink invalidálják a kulcsot.
+  return cached('attendance', TTL.SHORT, async () => {
+    const snap = await getDocs(collection(db, COLLECTIONS.ATTENDANCE));
+    const records: RawAttendance[] = [];
+    snap.forEach((doc) => {
+      const d = doc.data();
+      const mode = (d.mode ?? 'valós').toString().toLowerCase();
+      if (mode === 'teszt') return;
+      const name = (d.name ?? '').toString().trim();
+      if (!name) return;
+      records.push({
+        name,
+        status: (d.status ?? '').toString().trim(),
+        event_date: d.event_date ?? '',
+        mode,
+      });
     });
+    return records;
   });
-  return records;
 }
 
 /**
@@ -160,18 +165,20 @@ export interface Member {
 }
 
 export async function getAllMembers(): Promise<Member[]> {
-  const snap = await getDocs(query(collection(db, COLLECTIONS.MEMBERS), orderBy('name')));
-  const members: Member[] = [];
-  snap.forEach((d) => {
-    const data = d.data();
-    members.push({
-      id: d.id,
-      name: (data.name ?? '').toString(),
-      email: (data.email ?? '').toString(),
-      active: data.active ?? true,
+  return cached('members', TTL.MEDIUM, async () => {
+    const snap = await getDocs(query(collection(db, COLLECTIONS.MEMBERS), orderBy('name')));
+    const members: Member[] = [];
+    snap.forEach((d) => {
+      const data = d.data();
+      members.push({
+        id: d.id,
+        name: (data.name ?? '').toString(),
+        email: (data.email ?? '').toString(),
+        active: data.active ?? true,
+      });
     });
+    return members;
   });
-  return members;
 }
 
 export async function addMember(input: { name: string; email: string; active: boolean }): Promise<string> {
@@ -180,6 +187,8 @@ export async function addMember(input: { name: string; email: string; active: bo
     email: input.email.trim(),
     active: input.active,
   });
+  invalidate('members');
+  invalidate('memberByEmail');
   return ref.id;
 }
 
@@ -189,10 +198,14 @@ export async function updateMember(id: string, updates: Partial<Omit<Member, 'id
   if (updates.email !== undefined) clean.email = updates.email.trim();
   if (updates.active !== undefined) clean.active = updates.active;
   await updateDoc(doc(db, COLLECTIONS.MEMBERS, id), clean);
+  invalidate('members');
+  invalidate('memberByEmail');
 }
 
 export async function deleteMember(id: string): Promise<void> {
   await deleteDoc(doc(db, COLLECTIONS.MEMBERS, id));
+  invalidate('members');
+  invalidate('memberByEmail');
 }
 
 // ─────────────────────────────────────────────────────────────────
@@ -201,15 +214,17 @@ export async function deleteMember(id: string): Promise<void> {
 
 /** Lemondott alkalmak: dátum → opcionális indoklás. */
 export async function getCancelledSessions(): Promise<Map<string, CancelledSession>> {
-  const snap = await getDocs(collection(db, COLLECTIONS.CANCELLED));
-  const map = new Map<string, CancelledSession>();
-  snap.forEach((doc) => {
-    const data = doc.data();
-    if (data.date) {
-      map.set(data.date, { date: data.date, reason: data.reason });
-    }
+  return cached('cancelled', TTL.MEDIUM, async () => {
+    const snap = await getDocs(collection(db, COLLECTIONS.CANCELLED));
+    const map = new Map<string, CancelledSession>();
+    snap.forEach((doc) => {
+      const data = doc.data();
+      if (data.date) {
+        map.set(data.date, { date: data.date, reason: data.reason });
+      }
+    });
+    return map;
   });
-  return map;
 }
 
 export interface CancelledSessionWithId extends CancelledSession {
@@ -218,24 +233,30 @@ export interface CancelledSessionWithId extends CancelledSession {
 
 /** Lemondott alkalmak ID-vel együtt (admin CRUD-hoz). */
 export async function getCancelledSessionsWithIds(): Promise<CancelledSessionWithId[]> {
-  const snap = await getDocs(collection(db, COLLECTIONS.CANCELLED));
-  const list: CancelledSessionWithId[] = [];
-  snap.forEach((d) => {
-    const data = d.data();
-    if (data.date) list.push({ id: d.id, date: data.date, reason: data.reason });
+  return cached('cancelledWithIds', TTL.MEDIUM, async () => {
+    const snap = await getDocs(collection(db, COLLECTIONS.CANCELLED));
+    const list: CancelledSessionWithId[] = [];
+    snap.forEach((d) => {
+      const data = d.data();
+      if (data.date) list.push({ id: d.id, date: data.date, reason: data.reason });
+    });
+    return list.sort((a, b) => b.date.localeCompare(a.date)); // legújabb előre
   });
-  return list.sort((a, b) => b.date.localeCompare(a.date)); // legújabb előre
 }
 
 export async function addCancelledSession(date: string, reason?: string): Promise<string> {
   const payload: Record<string, unknown> = { date };
   if (reason && reason.trim()) payload.reason = reason.trim();
   const ref = await addDoc(collection(db, COLLECTIONS.CANCELLED), payload);
+  invalidate('cancelled');
+  invalidate('cancelledWithIds');
   return ref.id;
 }
 
 export async function deleteCancelledSession(id: string): Promise<void> {
   await deleteDoc(doc(db, COLLECTIONS.CANCELLED, id));
+  invalidate('cancelled');
+  invalidate('cancelledWithIds');
 }
 
 // ─────────────────────────────────────────────────────────────────
@@ -267,6 +288,7 @@ export async function addAttendanceBatch(rows: NewAttendanceRow[]): Promise<numb
     count++;
   }
   await batch.commit();
+  invalidate('attendance');
   return count;
 }
 
@@ -284,21 +306,23 @@ export interface Invoice {
 }
 
 export async function getAllInvoices(): Promise<Invoice[]> {
-  const snap = await getDocs(collection(db, COLLECTIONS.INVOICES));
-  const list: Invoice[] = [];
-  snap.forEach((d) => {
-    const data = d.data();
-    list.push({
-      id: d.id,
-      inv_date: (data.inv_date ?? '').toString(),
-      target_year: Number(data.target_year ?? 0),
-      target_month: Number(data.target_month ?? 0),
-      amount: Number(data.amount ?? 0),
-      filename: data.filename,
+  return cached('invoices', TTL.MEDIUM, async () => {
+    const snap = await getDocs(collection(db, COLLECTIONS.INVOICES));
+    const list: Invoice[] = [];
+    snap.forEach((d) => {
+      const data = d.data();
+      list.push({
+        id: d.id,
+        inv_date: (data.inv_date ?? '').toString(),
+        target_year: Number(data.target_year ?? 0),
+        target_month: Number(data.target_month ?? 0),
+        amount: Number(data.amount ?? 0),
+        filename: data.filename,
+      });
     });
+    // legújabb előre (év, hónap)
+    return list.sort((a, b) => (b.target_year - a.target_year) || (b.target_month - a.target_month));
   });
-  // legújabb előre (év, hónap)
-  return list.sort((a, b) => (b.target_year - a.target_year) || (b.target_month - a.target_month));
 }
 
 // ─────────────────────────────────────────────────────────────────
@@ -314,20 +338,22 @@ export interface Settlement {
 }
 
 export async function getAllSettlements(): Promise<Settlement[]> {
-  const snap = await getDocs(collection(db, COLLECTIONS.SETTLEMENTS));
-  const list: Settlement[] = [];
-  snap.forEach((d) => {
-    const data = d.data();
-    // Python `month_num` mezőt használ, korábbi TS kód `month`-ot — mindkettőre tűrünk
-    list.push({
-      id: d.id,
-      year: Number(data.year ?? 0),
-      month: Number(data.month_num ?? data.month ?? 0),
-      month_name: data.month_name,
-      saved_at: data.saved_at,
+  return cached('settlements', TTL.MEDIUM, async () => {
+    const snap = await getDocs(collection(db, COLLECTIONS.SETTLEMENTS));
+    const list: Settlement[] = [];
+    snap.forEach((d) => {
+      const data = d.data();
+      // Python `month_num` mezőt használ, korábbi TS kód `month`-ot — mindkettőre tűrünk
+      list.push({
+        id: d.id,
+        year: Number(data.year ?? 0),
+        month: Number(data.month_num ?? data.month ?? 0),
+        month_name: data.month_name,
+        saved_at: data.saved_at,
+      });
     });
+    return list.sort((a, b) => (b.year - a.year) || (b.month - a.month));
   });
-  return list.sort((a, b) => (b.year - a.year) || (b.month - a.month));
 }
 
 // ─────────────────────────────────────────────────────────────────
@@ -447,6 +473,7 @@ export async function saveSettlement(input: {
     df_osszesito: JSON.stringify(df_osszesito),
     saved_at: serverTimestamp(),
   });
+  invalidate('settlements');
   return id;
 }
 
@@ -509,17 +536,19 @@ export interface NameMapping {
 }
 
 export async function getAllNameMappings(): Promise<NameMapping[]> {
-  const snap = await getDocs(collection(db, COLLECTIONS.REVOLUT_MAPPING));
-  const list: NameMapping[] = [];
-  snap.forEach((d) => {
-    const data = d.data();
-    list.push({
-      id: d.id,
-      revolutName: (data.revolut_name ?? '').toString(),
-      systemName: (data.system_name ?? '').toString(),
+  return cached('nameMappings', TTL.MEDIUM, async () => {
+    const snap = await getDocs(collection(db, COLLECTIONS.REVOLUT_MAPPING));
+    const list: NameMapping[] = [];
+    snap.forEach((d) => {
+      const data = d.data();
+      list.push({
+        id: d.id,
+        revolutName: (data.revolut_name ?? '').toString(),
+        systemName: (data.system_name ?? '').toString(),
+      });
     });
+    return list.sort((a, b) => a.systemName.localeCompare(b.systemName, 'hu'));
   });
-  return list.sort((a, b) => a.systemName.localeCompare(b.systemName, 'hu'));
 }
 
 export async function addNameMapping(revolutName: string, systemName: string): Promise<string> {
@@ -535,11 +564,13 @@ export async function addNameMapping(revolutName: string, systemName: string): P
     revolut_name: revolutName.trim(),
     system_name: systemName.trim(),
   });
+  invalidate('nameMappings');
   return ref.id;
 }
 
 export async function deleteNameMapping(id: string): Promise<void> {
   await deleteDoc(doc(db, COLLECTIONS.REVOLUT_MAPPING, id));
+  invalidate('nameMappings');
 }
 
 // ─────────────────────────────────────────────────────────────────
@@ -614,13 +645,16 @@ export async function getAttendanceForDate(date: string): Promise<string[]> {
 
 /** Visszaadja a tagot az email alapján, vagy null-t ha nincs találat. */
 export async function getMemberByEmail(email: string): Promise<Member | null> {
-  const snap = await getDocs(
-    query(collection(db, COLLECTIONS.MEMBERS), where('email', '==', email.toLowerCase())),
-  );
-  if (snap.empty) return null;
-  const d = snap.docs[0];
-  const data = d.data();
-  return { id: d.id, name: (data.name ?? '').toString(), email: (data.email ?? '').toString(), active: data.active !== false };
+  const key = `memberByEmail:${email.toLowerCase()}`;
+  return cached(key, TTL.MEDIUM, async () => {
+    const snap = await getDocs(
+      query(collection(db, COLLECTIONS.MEMBERS), where('email', '==', email.toLowerCase())),
+    );
+    if (snap.empty) return null;
+    const d = snap.docs[0];
+    const data = d.data();
+    return { id: d.id, name: (data.name ?? '').toString(), email: (data.email ?? '').toString(), active: data.active !== false };
+  });
 }
 
 /**
@@ -644,7 +678,10 @@ export async function deleteAttendanceForPlayerOnDate(name: string, eventDate: s
       count++;
     }
   });
-  if (count > 0) await batch.commit();
+  if (count > 0) {
+    await batch.commit();
+    invalidate('attendance');
+  }
   return count;
 }
 
@@ -663,6 +700,7 @@ export async function upsertSelfRegistration(name: string, eventDate: string, st
       name, status, event_date: eventDate, mode: 'valós', timestamp: serverTimestamp(),
     });
   }
+  invalidate('attendance');
 }
 
 // ─────────────────────────────────────────────────────────────────
@@ -677,10 +715,12 @@ export interface AppConfig {
 const APP_CONFIG_DOC_ID = 'email_settings';
 
 export async function getAppConfig(): Promise<AppConfig> {
-  const snap = await getDoc(doc(db, COLLECTIONS.APP_CONFIG, APP_CONFIG_DOC_ID));
-  if (!snap.exists()) return { senderName: '', emailFooter: '' };
-  const d = snap.data();
-  return { senderName: String(d.senderName ?? ''), emailFooter: String(d.emailFooter ?? '') };
+  return cached('appConfig', TTL.MEDIUM, async () => {
+    const snap = await getDoc(doc(db, COLLECTIONS.APP_CONFIG, APP_CONFIG_DOC_ID));
+    if (!snap.exists()) return { senderName: '', emailFooter: '' };
+    const d = snap.data();
+    return { senderName: String(d.senderName ?? ''), emailFooter: String(d.emailFooter ?? '') };
+  });
 }
 
 export async function saveAppConfig(config: AppConfig): Promise<void> {
@@ -689,4 +729,5 @@ export async function saveAppConfig(config: AppConfig): Promise<void> {
     emailFooter: config.emailFooter,
     updated_at: serverTimestamp(),
   });
+  invalidate('appConfig');
 }
