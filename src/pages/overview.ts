@@ -41,52 +41,59 @@ interface OverviewState {
 
 // ─── Belépési pont ───
 export async function renderOverviewPage(container: HTMLElement): Promise<void> {
-  container.innerHTML = renderLoadingShell();
-
-  // Csak múltbeli (és kedd 21:00 után aznapi) alkalmak.
+  // Progresszív render: az oldal váza azonnal megjelenik a dátumokkal együtt
+  // (üres résztvevő-lista, '—' létszám). A 3 Firestore query függetlenül,
+  // párhuzamosan érkezik és mindegyik a saját szekcióját frissíti.
   const dates = pastTuesdaysForDisplay(9);
-  const authState = getAuthState();
-  const [attendeesByDate, cancelled, selfMember] = await Promise.all([
-    getAttendeesByDates(dates),
-    getCancelledSessions(),
-    authState.user?.email ? getMemberByEmail(authState.user.email) : Promise.resolve(null),
-  ]);
-  // A legutóbbi alkalom van alapból kiválasztva.
   const mostRecent = dates[dates.length - 1] ?? '';
+  const authState = getAuthState();
 
   const state: OverviewState = {
     dates,
-    upcoming: mostRecent,  // a "soron lévő" most a legutóbbi (nincs jövőbeli)
+    upcoming: mostRecent,
     selected: mostRecent,
-    attendeesByDate,
-    cancelled,
-    selfMember,
+    attendeesByDate: new Map(),
+    cancelled: new Map(),
+    selfMember: null,
     selfRegistering: false,
     editMode: false,
     pendingDelete: null,
     deleting: false,
   };
 
+  // First paint — instant, üres adattal
   container.innerHTML = renderShell(state);
   attachHandlers(container, state);
 
-  // Ha az auth állapot megváltozik (bejelentkezés / kijelentkezés) a router már
-  // újra-renderi az oldalt — nem kell itt külön kezelni.
-}
+  // Frissítő segédfüggvény: csak az érintett DOM-szakaszokat cseréli újra
+  const refreshDataSections = () => {
+    const hero = container.querySelector<HTMLElement>('#hero-wrapper');
+    if (hero) hero.innerHTML = renderHero(state);
+    const result = container.querySelector<HTMLElement>('#result-main');
+    if (result) result.innerHTML = renderResult(state);
+    const rail = container.querySelector<HTMLElement>('#date-rail');
+    if (rail) rail.innerHTML = renderDateRailItems(state);
+    const scroller = container.querySelector<HTMLElement>('#date-scroller');
+    if (scroller) scroller.innerHTML = state.dates.map((d) => renderDateChip(d, state)).join('');
+    attachHandlers(container, state);
+  };
 
-// ─── Loading ───
-function renderLoadingShell(): string {
-  return `
-    <div class="device">
-      <div style="height:88px;background:var(--bg-glass);border-bottom:1px solid var(--line)"></div>
-      <div class="px-5 pt-5 space-y-4">
-        <div class="h-44 rounded-[28px] animate-pulse" style="background:var(--line)"></div>
-        <div class="flex gap-2">
-          ${Array(6).fill(0).map(() => `<div class="h-20 w-16 rounded-2xl animate-pulse flex-none" style="background:var(--line)"></div>`).join('')}
-        </div>
-        <div class="h-48 rounded-[22px] animate-pulse" style="background:var(--line)"></div>
-      </div>
-    </div>`;
+  // 1) Cancelled sessions — kis kollekció, gyorsan jön
+  getCancelledSessions()
+    .then((c) => { state.cancelled = c; refreshDataSections(); })
+    .catch(() => { /* maradjon üres */ });
+
+  // 2) Attendees by dates — fő tartalom (létszámok + résztvevő grid)
+  getAttendeesByDates(dates)
+    .then((a) => { state.attendeesByDate = a; refreshDataSections(); })
+    .catch(() => { /* maradjon üres */ });
+
+  // 3) Self member — csak bejelentkezett user-eknek
+  if (authState.user?.email) {
+    getMemberByEmail(authState.user.email)
+      .then((m) => { state.selfMember = m; refreshDataSections(); })
+      .catch(() => { /* nem kritikus */ });
+  }
 }
 
 // ─── Shell ───
@@ -123,6 +130,7 @@ function renderShell(state: OverviewState): string {
 function renderHero(state: OverviewState): string {
   const date = state.selected;
   const isCancelled = state.cancelled.has(date);
+  const dataLoaded = state.attendeesByDate.has(date);
   const attendees = state.attendeesByDate.get(date) ?? [];
   const count = isCancelled ? 0 : attendees.length;
   const idealMin = 8;
@@ -148,13 +156,21 @@ function renderHero(state: OverviewState): string {
 
   // Státusz szöveg: múltbéli alkalomnál "Volt játék" / "Nem volt játék",
   // jövőbenire "Lesz edzés ✓" vagy "Még X fő kell"
+  // Amíg betöltődik az adat, semleges placeholder szöveg + szám.
   let statusText: string;
-  if (isPast) {
+  if (!dataLoaded) {
+    statusText = 'Betöltés…';
+  } else if (isPast) {
     statusText = count > 0 ? 'Volt játék' : 'Nem volt játék';
   } else {
     statusText = isReady ? 'Lesz edzés ✓' : `Még ${idealMin - count} fő kell`;
   }
-  const statusIsGood = isPast ? count > 0 : isReady;
+  const statusIsGood = !dataLoaded ? false : (isPast ? count > 0 : isReady);
+
+  const countDisplay = dataLoaded ? String(count) : '·';
+  const peopleSubtext = dataLoaded
+    ? `${count} fő ${isPast ? 'volt jelen' : 'jelentkezett'}`
+    : 'Adatok betöltése';
 
   const countSection = isCancelled
     ? `<div class="mt-4">
@@ -163,11 +179,11 @@ function renderHero(state: OverviewState): string {
        </div>`
     : `<div class="mt-4 flex items-center gap-3">
         <div class="w-12 h-12 rounded-full flex items-center justify-center flex-shrink-0"
-             style="background:${statusIsGood ? 'color-mix(in oklab,#10b981 16%,transparent)' : 'color-mix(in oklab,var(--accent) 14%,transparent)'};border:1px solid color-mix(in oklab,currentColor 20%,transparent);color:${statusIsGood ? '#047857' : 'var(--accent-ink)'}">
-          <span class="font-mono-tnum font-bold text-[18px] num-display">${count}</span>
+             style="background:${statusIsGood ? 'color-mix(in oklab,#10b981 16%,transparent)' : 'color-mix(in oklab,var(--fg-3) 12%,transparent)'};border:1px solid color-mix(in oklab,currentColor 20%,transparent);color:${statusIsGood ? '#047857' : 'var(--fg-2)'}">
+          <span class="font-mono-tnum font-bold text-[18px] num-display">${countDisplay}</span>
         </div>
         <div class="min-w-0">
-          <p class="text-[14px] font-semibold text-fg-1">${count} fő ${isPast ? 'volt jelen' : 'jelentkezett'}</p>
+          <p class="text-[14px] font-semibold text-fg-1">${peopleSubtext}</p>
           <p class="text-[12px] text-fg-2">${statusText}</p>
         </div>
        </div>`;
@@ -216,6 +232,8 @@ function renderDateChip(date: string, state: OverviewState): string {
   const isCancelled = state.cancelled.has(date);
   const isSelected = date === state.selected;
   const isUpcoming = date === state.upcoming;
+  // Adat még nem érkezett meg → '—', különben a tényleges szám
+  const dataLoaded = state.attendeesByDate.has(date);
   const count = state.attendeesByDate.get(date)?.length ?? 0;
 
   const d = dayOf(date);
@@ -247,7 +265,7 @@ function renderDateChip(date: string, state: OverviewState): string {
       </span>
       <span class="text-[10px] mt-0.5 font-mono-tnum"
             style="color:${isSelected ? 'var(--accent-ink)' : 'var(--fg-3)'}">
-        ${isCancelled ? '—' : `${count} fő`}
+        ${isCancelled ? '—' : dataLoaded ? `${count} fő` : '·'}
       </span>
     </button>`;
 }
@@ -274,6 +292,7 @@ function renderDateRailItem(date: string, state: OverviewState): string {
   const isCancelled = state.cancelled.has(date);
   const isSelected = date === state.selected;
   const isUpcoming = date === state.upcoming;
+  const dataLoaded = state.attendeesByDate.has(date);
   const count = state.attendeesByDate.get(date)?.length ?? 0;
   const d = dayOf(date);
   const monthShort = formatMonthShortHu(date);
@@ -297,7 +316,7 @@ function renderDateRailItem(date: string, state: OverviewState): string {
 
   const status = isCancelled
     ? `<span class="text-[11px] font-medium" style="color:var(--fg-3);${strike}">Elmarad</span>`
-    : `<span class="text-[11px] font-mono-tnum font-medium" style="color:${subColor}">${count} fő</span>`;
+    : `<span class="text-[11px] font-mono-tnum font-medium" style="color:${subColor}">${dataLoaded ? `${count} fő` : '·'}</span>`;
 
   const relSub = isCancelled
     ? ''

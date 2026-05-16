@@ -4,7 +4,7 @@
  */
 
 import { renderHeader } from '../components/header';
-import { getAllAttendanceRecords, getSettlementsForPlayer, type RawAttendance, type PlayerSettlementRow } from '../lib/firestore';
+import { getAllMembers, getAttendanceForPlayer, getSettlementsForPlayer, type RawAttendance, type PlayerSettlementRow } from '../lib/firestore';
 import { getAuthState } from '../lib/auth';
 import { getInitials } from '../lib/avatar';
 import { estimateCost, formatHuf } from '../lib/cost';
@@ -13,7 +13,9 @@ import { formatDateHuLong } from '../lib/dates';
 interface ProfileSession { date: string; year: number; month: number; }
 
 interface ProfileState {
-  allRecords: RawAttendance[];
+  // Csak az aktuálisan kiválasztott játékos rekordjai — nem a teljes
+  // attendance kollekció. Indexelt firestore query (where name == X).
+  playerRecords: RawAttendance[];
   playerNames: string[];
   availableYears: number[];
   currentYear: number;
@@ -24,6 +26,7 @@ interface ProfileState {
   isAdmin: boolean;
   settlementRows: PlayerSettlementRow[];
   settlementsLoading: boolean;
+  recordsLoading: boolean;
 }
 
 const MONTH_SHORT = ['Jan','Feb','Már','Ápr','Máj','Jún','Júl','Aug','Szep','Okt','Nov','Dec'];
@@ -45,16 +48,15 @@ function readHashQuery(): URLSearchParams {
 // ─── Belépési pont ───
 export async function renderProfilePage(container: HTMLElement): Promise<void> {
   container.innerHTML = renderShell(renderLoadingBody());
-  const allRecords = await getAllAttendanceRecords();
-  const playerNames = uniqueSorted(allRecords.map((r) => r.name));
+
+  // Player lista a members kollekcióból (~20 dokumentum) — sokkal gyorsabb mint
+  // a teljes attendance scan-ből egyedi neveket képezni.
+  const members = await getAllMembers();
+  const playerNames = uniqueSorted(members.map((m) => m.name));
   if (playerNames.length === 0) {
     container.querySelector<HTMLElement>('#profile-body')!.innerHTML = renderEmptyState();
     return;
   }
-  const availableYears = uniqueSorted(
-    allRecords.filter((r) => r.status === 'Yes' && r.event_date)
-      .map((r) => Number(r.event_date.slice(0, 4))).filter(Number.isFinite).map(String),
-  ).map(Number).sort((a, b) => b - a);
 
   // URL-ből érkező név preselect (pl. Alkalmak oldalról linkkel)
   const queryName = readHashQuery().get('name');
@@ -64,20 +66,56 @@ export async function renderProfilePage(container: HTMLElement): Promise<void> {
   const currentYear = now.getFullYear();
   const currentMonth = now.getMonth() + 1;
   const state: ProfileState = {
-    allRecords, playerNames,
-    availableYears: availableYears.length ? availableYears : [currentYear],
+    playerRecords: [],
+    playerNames,
+    availableYears: [currentYear],
     currentYear, currentMonth,
     selectedName: initialName,
-    selectedYear: availableYears.includes(currentYear) ? currentYear : availableYears[0] || currentYear,
+    selectedYear: currentYear,
     playerSessions: [],
     isAdmin: getAuthState().isAdmin,
     settlementRows: [],
     settlementsLoading: false,
+    recordsLoading: true,
   };
-  recomputePlayerSessions(state);
+  // Initial render with loading state for the player section
   container.innerHTML = renderShell(renderBody(state));
   attachHandlers(container, state);
+
+  // Background: a kiválasztott játékos rekordjainak betöltése
+  loadPlayerRecords(container, state);
   if (state.isAdmin) loadSettlementsForPlayer(container, state);
+}
+
+/**
+ * A kiválasztott játékos jelenléti rekordjait tölti be indexelt query-vel
+ * (where name == X). Sokkal gyorsabb mint a teljes attendance kollekció.
+ * Az availableYears-t is az adott játékos rekordjaiból építi.
+ */
+function loadPlayerRecords(container: HTMLElement, state: ProfileState) {
+  const name = state.selectedName;
+  state.recordsLoading = true;
+  getAttendanceForPlayer(name)
+    .then((records) => {
+      if (state.selectedName !== name) return; // stale: player változott közben
+      state.playerRecords = records;
+      // Csak az aktuális player éveiből építjük az év-választót
+      const years = uniqueSorted(
+        records.filter((r) => r.status === 'Yes' && r.event_date)
+          .map((r) => Number(r.event_date.slice(0, 4))).filter(Number.isFinite).map(String),
+      ).map(Number).sort((a, b) => b - a);
+      state.availableYears = years.length ? years : [state.currentYear];
+      if (!state.availableYears.includes(state.selectedYear)) {
+        state.selectedYear = state.availableYears.includes(state.currentYear)
+          ? state.currentYear
+          : state.availableYears[0];
+      }
+      state.recordsLoading = false;
+      recomputePlayerSessions(state);
+      const body = container.querySelector<HTMLElement>('#profile-body');
+      if (body) { body.innerHTML = renderBody(state); attachHandlers(container, state); }
+    })
+    .catch(() => { state.recordsLoading = false; });
 }
 
 // ─── Shell ───
@@ -497,8 +535,8 @@ function chartEmpty(title: string, msg: string): string {
 function recomputePlayerSessions(state: ProfileState) {
   const seen = new Set<string>();
   const sessions: ProfileSession[] = [];
-  for (const r of state.allRecords) {
-    if (r.name !== state.selectedName || r.status !== 'Yes' || !r.event_date) continue;
+  for (const r of state.playerRecords) {
+    if (r.status !== 'Yes' || !r.event_date) continue;
     if (seen.has(r.event_date)) continue;
     seen.add(r.event_date);
     const [y, m] = r.event_date.split('-').map(Number);
@@ -539,7 +577,12 @@ function attachHandlers(container: HTMLElement, state: ProfileState) {
 
   playerSel.addEventListener('change', () => {
     state.selectedName = playerSel.value;
+    // Üres playerRecords-zal indítjuk a refresh-t, hogy ne mutasson stale adatot.
+    state.playerRecords = [];
+    state.playerSessions = [];
+    state.recordsLoading = true;
     refresh();
+    loadPlayerRecords(container, state);
     if (state.isAdmin) loadSettlementsForPlayer(container, state);
   });
   yearSel.addEventListener('change', () => { state.selectedYear = Number(yearSel.value); refresh(); });

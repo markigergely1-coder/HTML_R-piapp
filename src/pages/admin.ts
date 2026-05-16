@@ -39,8 +39,11 @@ interface AdminState {
   entries: Map<string, AdminEntry>;
   toast: { kind: 'success' | 'error'; msg: string } | null;
   saving: boolean;
-  // gyors visszakeresés vendéglistához
+  // Vendég history dropdown adatai — lazy load (csak Step 2-höz kell).
+  // Üres listával indul → az Admin oldal cold-boot-ja nem vár a full
+  // attendance kollekció letöltésére.
   historicalAll: RawAttendance[];
+  historicalLoading: boolean;
 }
 
 let toastTimer: number | null = null;
@@ -54,7 +57,6 @@ export async function renderAdminPage(container: HTMLElement): Promise<void> {
 
   const dates = generateTuesdayDates(8, 1);
   const upcoming = upcomingTuesday(dates);
-  const historicalAll = await getAllAttendanceRecords();
 
   const entries = new Map<string, AdminEntry>();
   for (const n of MAIN_NAME_LIST) {
@@ -69,7 +71,8 @@ export async function renderAdminPage(container: HTMLElement): Promise<void> {
     entries,
     toast: null,
     saving: false,
-    historicalAll,
+    historicalAll: [],
+    historicalLoading: false,
   };
 
   rerender(container, state);
@@ -487,6 +490,25 @@ function rerender(container: HTMLElement, state: AdminState) {
   }
 }
 
+/**
+ * Lazy load: a guest history dropdown adatait csak akkor tölti be, amikor
+ * a user először lép a Step 2-re. Egyszer fut, utána memóriában marad.
+ * Nem blokkolja a Step 2 render-t — a dropdownok kezdetben üres history-val
+ * jelennek meg, majd amikor megérkezik az adat, automatikusan újrarendereződik.
+ */
+function ensureHistoricalLoaded(container: HTMLElement, state: AdminState) {
+  if (state.historicalAll.length > 0 || state.historicalLoading) return;
+  state.historicalLoading = true;
+  getAllAttendanceRecords()
+    .then((records) => {
+      state.historicalAll = records;
+      state.historicalLoading = false;
+      // Csak akkor re-render, ha még mindig a Step 2-n vagyunk
+      if (state.step === 2) rerender(container, state);
+    })
+    .catch(() => { state.historicalLoading = false; });
+}
+
 /** Csak a dátum-pickert renderezi újra (nem zavarja a stats bar / row state-et). */
 function rerenderDatePicker(container: HTMLElement, state: AdminState) {
   const dp = container.querySelector<HTMLElement>('#admin-datepicker');
@@ -625,6 +647,7 @@ function attachHandlers(container: HTMLElement, state: AdminState) {
   container.querySelector<HTMLButtonElement>('#admin-next-1')?.addEventListener('click', () => {
     state.step = 2;
     rerender(container, state);
+    ensureHistoricalLoaded(container, state);
   });
 
   // Step 2
@@ -664,6 +687,7 @@ function attachHandlers(container: HTMLElement, state: AdminState) {
     if (state.saving) return;
     state.step = 2;
     rerender(container, state);
+    ensureHistoricalLoaded(container, state);
   });
   container.querySelector<HTMLButtonElement>('#admin-save')?.addEventListener('click', async () => {
     if (state.saving) return;

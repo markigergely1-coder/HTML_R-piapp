@@ -125,6 +125,29 @@ export async function getAllAttendanceRecords(): Promise<RawAttendance[]> {
   return records;
 }
 
+/**
+ * Egy adott játékos összes 'Yes'/'No' jelenléti rekordja — indexelt query
+ * a name mezőre. Sokkal gyorsabb mint a teljes attendance scan, mert csak
+ * az adott névhez tartozó rekordok jönnek le.
+ */
+export async function getAttendanceForPlayer(name: string): Promise<RawAttendance[]> {
+  const q = query(collection(db, COLLECTIONS.ATTENDANCE), where('name', '==', name));
+  const snap = await getDocs(q);
+  const records: RawAttendance[] = [];
+  snap.forEach((doc) => {
+    const d = doc.data();
+    const mode = (d.mode ?? 'valós').toString().toLowerCase();
+    if (mode === 'teszt') return;
+    records.push({
+      name,
+      status: (d.status ?? '').toString().trim(),
+      event_date: d.event_date ?? '',
+      mode,
+    });
+  });
+  return records;
+}
+
 // ─────────────────────────────────────────────────────────────────
 // Members CRUD
 // ─────────────────────────────────────────────────────────────────

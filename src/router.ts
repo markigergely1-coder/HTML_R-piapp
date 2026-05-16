@@ -96,17 +96,24 @@ export function startRouter(container: HTMLElement) {
     }
   });
 
-  // Az első auth state változás után, illetve minden további
-  // bejelentkezésnél/kijelentkezésnél újra dispatch-elünk.
-  // A loading -> resolved átmenet is itt fut le, így a header is frissül.
-  let initialized = false;
+  // Azonnali dispatch loading state-ben → nincs 500 ms-os fehér viewport.
+  // A publikus oldalak (overview, admin/regisztráció) loading nélkül is
+  // teljesen renderelődnek. Az admin-gated oldalak a saját auth.loading
+  // bail-out branch-ükkel maradnak a loading skeleton-on, amíg az auth
+  // resolve-ódik — utána re-dispatch.
+  let authResolved = false;
   let lastUserId: string | null = null;
+  let dispatched = false;
   onAuthChange((state) => {
-    if (state.loading) return;
+    if (state.loading) {
+      if (!dispatched) { dispatched = true; dispatch(container); }
+      return;
+    }
     const currentUserId = state.user?.uid ?? null;
-    if (!initialized) {
-      initialized = true;
+    if (!authResolved) {
+      authResolved = true;
       lastUserId = currentUserId;
+      dispatched = true;
       dispatch(container);
       return;
     }
@@ -115,13 +122,4 @@ export function startRouter(container: HTMLElement) {
       dispatch(container);
     }
   });
-
-  // Fallback: ha valamiért nem fut le az auth callback gyorsan,
-  // egyszer mégis renderelünk (loading state mellett)
-  setTimeout(() => {
-    if (!initialized) {
-      initialized = true;
-      dispatch(container);
-    }
-  }, 500);
 }
