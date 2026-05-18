@@ -11,8 +11,7 @@ import { MAIN_NAME_LIST } from '../lib/config';
 
 const MAX_GUESTS = 10;
 import {
-  generateTuesdayDates,
-  upcomingTuesday,
+  pastTuesdaysForDisplay,
   formatDateHuLong,
   formatMonthShortHu,
   dayOf,
@@ -55,8 +54,10 @@ let toastTimer: number | null = null;
 export async function renderAdminPage(container: HTMLElement): Promise<void> {
   container.innerHTML = renderShell(renderLoadingBody());
 
-  const dates = generateTuesdayDates(8, 1);
-  const upcoming = upcomingTuesday(dates);
+  // Csak múltbeli keddek. Az aznapi kedd csak 21:00 (magyar idő) után számít
+  // "múltbelinek" — addig még a hét előzőjét mutatja legutóbbiként.
+  const dates = pastTuesdaysForDisplay(9);
+  const mostRecent = dates[dates.length - 1] ?? '';
 
   const entries = new Map<string, AdminEntry>();
   for (const n of MAIN_NAME_LIST) {
@@ -65,7 +66,7 @@ export async function renderAdminPage(container: HTMLElement): Promise<void> {
 
   const state: AdminState = {
     step: 1,
-    date: upcoming,
+    date: mostRecent,
     dates,
     dateMenuOpen: false,
     entries,
