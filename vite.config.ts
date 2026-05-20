@@ -39,11 +39,25 @@ export default defineConfig({
         ],
       },
       workbox: {
+        // Új SW azonnal aktiválódjon, NE várjon hogy minden tab bezárulj.
+        // Ez kritikus telepített PWA-knál — egyébként napokig stale chunk-okat
+        // szolgálna ki és „TypeError: 'text/html' is not a valid JavaScript MIME type"
+        // hibát kapnánk amikor egy lazy-imported page chunk hash-e megváltozik.
+        skipWaiting: true,
+        clientsClaim: true,
+        cleanupOutdatedCaches: true,
         // App héj cache-elése — minden static asset
         globPatterns: ['**/*.{js,css,html,svg,png,ico,woff2}'],
         // NE cache-elje a Firebase és Google API-kat (azokat a Firestore SDK maga kezeli)
         navigateFallback: '/index.html',
-        navigateFallbackDenylist: [/^\/__\/auth\//, /^\/api\//],
+        // navigateFallback NE szolgálja ki a JS/CSS chunk request-eket (különben
+        // text/html-t kapunk és MIME error). Csak HTML-navigációra szóljon.
+        navigateFallbackDenylist: [
+          /^\/__\/auth\//,
+          /^\/api\//,
+          /\.(?:js|mjs|css|map|json|woff2?|png|jpg|jpeg|svg|ico)$/i,
+          /^\/assets\//,
+        ],
         runtimeCaching: [
           {
             urlPattern: /^https:\/\/fonts\.googleapis\.com\/.*/i,

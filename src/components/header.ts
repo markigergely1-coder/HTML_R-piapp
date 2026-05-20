@@ -91,13 +91,13 @@ export function renderHeader(currentPage: PageKey): string {
   return `
     <div class="glass sticky top-0 z-30">
       <div class="px-5 py-3 flex items-center justify-between">
-        <div class="flex items-center gap-2.5">
+        <a href="#/" class="flex items-center gap-2.5 no-underline" style="color:inherit;text-decoration:none" aria-label="Főoldal">
           ${renderLogo()}
           <div class="flex flex-col leading-none">
             <span class="text-[15px] font-semibold tracking-tight text-fg-1">Röpi</span>
             <span class="eyebrow text-[9px] mt-0.5">${PAGE_LABEL[currentPage]}</span>
           </div>
-        </div>
+        </a>
         <div class="flex items-center gap-2">
           ${renderThemeToggle()}
           ${renderAuthBlock()}
