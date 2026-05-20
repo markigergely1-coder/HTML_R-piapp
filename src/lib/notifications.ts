@@ -93,14 +93,35 @@ export async function subscribeToPush(
     return { ok: false, error: 'permission-denied' };
   }
 
-  // FCM service worker regisztráció (külön a vite-plugin-pwa SW-jétől)
+  // FCM service worker regisztráció (külön a vite-plugin-pwa SW-jétől).
+  // 1) Először megnézzük van-e már aktív registration ezen a scope-on, és
+  //    csak akkor regisztrálunk, ha nincs. Az iOS Safari néha nem szereti az
+  //    .update()-ot egy aktív SW-re.
+  // 2) Megvárjuk hogy a SW aktív state-be kerüljön mielőtt token-t kérünk.
   let swReg: ServiceWorkerRegistration;
   try {
-    swReg = await navigator.serviceWorker.register('/firebase-messaging-sw.js', { scope: '/firebase-cloud-messaging-push-scope' });
-    await swReg.update();
+    const existing = await navigator.serviceWorker.getRegistration('/firebase-cloud-messaging-push-scope');
+    if (existing) {
+      swReg = existing;
+    } else {
+      swReg = await navigator.serviceWorker.register('/firebase-messaging-sw.js', {
+        scope: '/firebase-cloud-messaging-push-scope',
+      });
+    }
+    // Wait for activation
+    if (swReg.installing || swReg.waiting) {
+      await new Promise<void>((resolve) => {
+        const sw = swReg.installing ?? swReg.waiting;
+        if (!sw) { resolve(); return; }
+        if (sw.state === 'activated') { resolve(); return; }
+        sw.addEventListener('statechange', () => {
+          if (sw.state === 'activated') resolve();
+        });
+      });
+    }
   } catch (err) {
     console.warn('[notifications] FCM SW register failed:', err);
-    return { ok: false, error: 'sw-register-failed' };
+    return { ok: false, error: errorWithDetails('sw-register-failed', err) };
   }
 
   // FCM token
@@ -112,7 +133,7 @@ export async function subscribeToPush(
     });
   } catch (err) {
     console.warn('[notifications] getToken failed:', err);
-    return { ok: false, error: 'get-token-failed' };
+    return { ok: false, error: errorWithDetails('get-token-failed', err) };
   }
   if (!token) return { ok: false, error: 'no-token' };
 
@@ -228,6 +249,18 @@ function setupForegroundListener() {
         .catch(() => {});
     }
   });
+}
+
+/** Firebase / browser error → kód + magyarázó string. */
+function errorWithDetails(prefix: string, err: unknown): string {
+  // FirebaseError tartalmaz egy .code mezőt, pl. 'messaging/permission-blocked'
+  const e = err as { code?: string; name?: string; message?: string };
+  const code = e?.code ?? e?.name ?? '';
+  const msg = e?.message ?? String(err);
+  // Csak a fő részt vesszük (a Firebase error message-ek hosszúak)
+  const shortMsg = msg.split('(')[0]?.trim() ?? msg;
+  if (code) return `${prefix}: ${code}`;
+  return `${prefix}: ${shortMsg.slice(0, 120)}`;
 }
 
 /** UA → ember-olvasható eszköz név. */

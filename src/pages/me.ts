@@ -901,14 +901,18 @@ async function handlePushSubscribe(container: HTMLElement, state: MeState) {
     const result = await subscribeToPush(state.member.id, state.member.email);
     if (!result.ok) {
       state.pushPermission = currentPermission();
+      // A hiba kódja lehet 'unsupported', 'permission-denied', vagy 'get-token-failed: messaging/...'
+      const code = result.error.split(':')[0]?.trim() ?? result.error;
+      const detail = result.error.includes(':') ? result.error.split(':').slice(1).join(':').trim() : '';
       const msgMap: Record<string, string> = {
         'unsupported': 'Ez a böngésző nem támogatja az értesítéseket',
         'permission-denied': 'Engedély megtagadva — a böngésző beállításaiban tudod feloldani',
         'sw-register-failed': 'A service worker regisztrálása sikertelen',
-        'get-token-failed': 'Token-lekérés hiba — próbáld újra később',
+        'get-token-failed': 'Token-lekérés hiba',
         'no-token': 'Nem kaptunk push tokent',
       };
-      state.toast = { kind: 'error', msg: msgMap[result.error] ?? `Hiba: ${result.error}` };
+      const base = msgMap[code] ?? `Hiba: ${code}`;
+      state.toast = { kind: 'error', msg: detail ? `${base} (${detail})` : base };
     } else {
       // Refresh subscriptions
       state.subscriptions = await getMySubscriptions(state.member.id);
