@@ -4,6 +4,9 @@
  * Funkciók:
  *   - sendBillingEmails: Gmail SMTP-n keresztül elküld N db személyre szabott
  *     emailt, és opcionálisan egy admin összesítőt PDF csatolmánnyal.
+ *   - tuesdayReminder:      schedulált push (kedd 9:00) — re-export ./notifications-ből
+ *   - onCancellation:       Firestore trigger — re-export
+ *   - onAttendanceFullTeam: Firestore trigger — re-export
  *
  * Secrets (firebase functions:secrets:set GMAIL_USER, GMAIL_PASS):
  *   - GMAIL_USER: a küldő Gmail cím (pl. ropiplabda.app@gmail.com)
@@ -13,10 +16,17 @@
 import { onCall, HttpsError } from 'firebase-functions/v2/https';
 import { defineSecret } from 'firebase-functions/params';
 import { setGlobalOptions } from 'firebase-functions/v2';
+import * as admin from 'firebase-admin';
 import * as nodemailer from 'nodemailer';
 
 // Runtime: Node.js 22 (upgraded from 20)
 setGlobalOptions({ region: 'europe-west1', maxInstances: 3 });
+
+// Firebase Admin SDK inicializálás (csak egyszer)
+admin.initializeApp();
+
+// Push notification function-ök re-exportja
+export { tuesdayReminder, onCancellation, onAttendanceFullTeam } from './notifications';
 
 const GMAIL_USER = defineSecret('GMAIL_USER');
 const GMAIL_PASS = defineSecret('GMAIL_PASS');
