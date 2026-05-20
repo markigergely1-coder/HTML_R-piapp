@@ -28,6 +28,7 @@ const ROUTES: Route[] = [
   { pattern: /^#?\/profile\/?$/,    render: renderProfilePage },
   { pattern: /^#?\/database\/?$/,   render: renderDatabasePage },
   { pattern: /^#?\/qr\/?$/,         render: renderQrPage },
+  { pattern: /^#?\/me\/?$/,        render: async (c) => { const { renderMePage }       = await import('./pages/me');       return renderMePage(c); } },
   { pattern: /^#?\/yearly\/?$/,    render: async (c) => { const { renderYearlyPage }   = await import('./pages/yearly');   return renderYearlyPage(c); } },
   // Admin — lazy loaded, only downloaded after admin login
   { pattern: /^#?\/admin\/?$/,       render: async (c) => { const { renderAdminPage }       = await import('./pages/admin');       return renderAdminPage(c); } },

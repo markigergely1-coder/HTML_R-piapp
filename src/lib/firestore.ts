@@ -157,12 +157,52 @@ export async function getAttendanceForPlayer(name: string): Promise<RawAttendanc
 // Members CRUD
 // ─────────────────────────────────────────────────────────────────
 
+export interface MemberNotificationPrefs {
+  enabled: boolean;
+  events: {
+    tuesdayReminder: boolean;
+    cancellation: boolean;
+    fullTeam: boolean;
+    newRegistration: boolean;
+    payment: boolean;
+  };
+  reminderTime: string;            // "HH:mm" — csapatszintű emlékeztető idő (Phase B-től használt)
+  quietHours: {
+    enabled: boolean;
+    from: string;                  // "HH:mm"
+    to: string;                    // "HH:mm"
+  };
+}
+
+export interface MemberPrefs {
+  notifications?: MemberNotificationPrefs;
+}
+
 export interface Member {
   id: string;
   name: string;
   email: string;
   active: boolean;
+  prefs?: MemberPrefs;
 }
+
+/** Alapértelmezett notification prefs új user-eknek (Phase B-től használt). */
+export const DEFAULT_NOTIFICATION_PREFS: MemberNotificationPrefs = {
+  enabled: false,                  // alapból OFF; user kifejezetten engedélyezi
+  events: {
+    tuesdayReminder: true,
+    cancellation: true,
+    fullTeam: true,
+    newRegistration: false,
+    payment: false,
+  },
+  reminderTime: '09:00',
+  quietHours: {
+    enabled: false,
+    from: '22:00',
+    to: '07:00',
+  },
+};
 
 export async function getAllMembers(): Promise<Member[]> {
   return cached('members', TTL.MEDIUM, async () => {
@@ -175,6 +215,7 @@ export async function getAllMembers(): Promise<Member[]> {
         name: (data.name ?? '').toString(),
         email: (data.email ?? '').toString(),
         active: data.active ?? true,
+        prefs: data.prefs as MemberPrefs | undefined,
       });
     });
     return members;
@@ -653,8 +694,24 @@ export async function getMemberByEmail(email: string): Promise<Member | null> {
     if (snap.empty) return null;
     const d = snap.docs[0];
     const data = d.data();
-    return { id: d.id, name: (data.name ?? '').toString(), email: (data.email ?? '').toString(), active: data.active !== false };
+    return {
+      id: d.id,
+      name: (data.name ?? '').toString(),
+      email: (data.email ?? '').toString(),
+      active: data.active !== false,
+      prefs: data.prefs as MemberPrefs | undefined,
+    };
   });
+}
+
+/**
+ * Frissíti a member.prefs mezőjét (setDoc merge-dzsel — csak a prefs alá ír).
+ * A többi mező (name, email, active) érintetlen marad.
+ */
+export async function updateMemberPrefs(id: string, prefs: MemberPrefs): Promise<void> {
+  await setDoc(doc(db, COLLECTIONS.MEMBERS, id), { prefs }, { merge: true });
+  invalidate('members');
+  invalidate('memberByEmail');
 }
 
 /**

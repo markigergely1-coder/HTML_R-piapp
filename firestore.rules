@@ -37,6 +37,17 @@ service cloud.firestore {
     match /members/{doc} {
       allow read: if true;
       allow write: if isAdmin();
+      // Self-create: bejelentkezett, email-verified user létrehozhat saját rekordot
+      // (auto-onboarding az első loginnál). Email-nek a Google email-jével kell egyeznie.
+      allow create: if request.auth != null
+        && request.auth.token.email_verified == true
+        && request.resource.data.email == request.auth.token.email;
+      // Self-update: saját rekord frissítése (név átírás, prefs mentés).
+      // Nem írhatja át más rekordját, az email mező nem változhat.
+      allow update: if request.auth != null
+        && request.auth.token.email_verified == true
+        && resource.data.email == request.auth.token.email
+        && request.resource.data.email == resource.data.email;
     }
     // QR check-in publikus — bárki regisztrálhat magát
     match /device_registrations/{doc} {

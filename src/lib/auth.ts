@@ -19,6 +19,7 @@ import {
 } from 'firebase/auth';
 import { auth, googleProvider } from './firebase';
 import { logEvent } from './logger';
+import { getMemberByEmail, addMember } from './firestore';
 
 /** Admin email-ek — szinkronban a Streamlit secrets-szel. */
 export const ADMIN_EMAILS = [
@@ -43,9 +44,32 @@ onAuthStateChanged(auth, (user) => {
     isAdmin: !!user && ADMIN_EMAILS.includes(email),
     loading: false,
   };
-  if (user && wasLoggedOut) void logEvent('info', 'User signed in', { email: user.email });
+  if (user && wasLoggedOut) {
+    void logEvent('info', 'User signed in', { email: user.email });
+    void ensureMemberExists(user.email ?? '', user.displayName ?? '');
+  }
   for (const l of listeners) l(currentState);
 });
+
+/**
+ * Az első bejelentkezéskor automatikusan létrehoz egy member rekordot
+ * a Google email + displayName alapján, ha még nincs ilyen email a `members` collection-ben.
+ * Idempotens: ha már van member, nem csinál semmit.
+ */
+async function ensureMemberExists(email: string, displayName: string): Promise<void> {
+  const normalizedEmail = email.toLowerCase().trim();
+  if (!normalizedEmail) return;
+  try {
+    const existing = await getMemberByEmail(normalizedEmail);
+    if (existing) return;
+    // Név forrás: Google displayName, vagy email előtti rész fallback-ként
+    const name = displayName.trim() || normalizedEmail.split('@')[0];
+    await addMember({ name, email: normalizedEmail, active: true });
+    void logEvent('info', 'Member auto-created from login', { name, email: normalizedEmail });
+  } catch (err) {
+    console.warn('[auth] ensureMemberExists failed:', err);
+  }
+}
 
 // Modulbetöltéskor egyszer kikéri a függő redirect eredményt (ha van).
 getRedirectResult(auth).catch((err) => {

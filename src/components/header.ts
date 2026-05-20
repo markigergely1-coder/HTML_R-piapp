@@ -13,6 +13,7 @@ import { getCurrentTheme } from '../lib/theme';
 export type PageKey =
   | 'overview'
   | 'profile'
+  | 'me'
   | 'database'
   | 'yearly'
   | 'qr'
@@ -27,7 +28,7 @@ interface TabDef {
   key: PageKey;
   label: string;
   href: string;
-  visibility: 'always' | 'authed' | 'admin' | 'transient';
+  visibility: 'always' | 'admin' | 'transient';
 }
 
 const TABS: TabDef[] = [
@@ -35,15 +36,14 @@ const TABS: TabDef[] = [
   { key: 'admin',       label: 'Regisztráció', href: '#/admin',       visibility: 'always' },
   { key: 'overview',    label: 'Alkalmak',    href: '#/',             visibility: 'always' },
 
-  // Tranziens: csak akkor jelenik meg, ha az aktuális oldal a profile
+  // Tranziens: csak akkor jelenik meg, ha az aktuális oldal ez
   { key: 'profile',     label: 'Profil',      href: '#/profile',     visibility: 'transient' },
+  { key: 'me',          label: 'Saját',       href: '#/me',          visibility: 'transient' },
 
-  // Bejelentkezett user-eknek (admin is)
-  { key: 'database',    label: 'Adatbázis',   href: '#/database',    visibility: 'authed' },
-  { key: 'yearly',      label: 'Statisztikák',href: '#/yearly',      visibility: 'authed' },
-  { key: 'qr',          label: 'QR',          href: '#/qr',          visibility: 'authed' },
-
-  // Admin only
+  // Admin only (logged-in non-admin nem látja)
+  { key: 'database',    label: 'Adatbázis',   href: '#/database',    visibility: 'admin' },
+  { key: 'yearly',      label: 'Statisztikák',href: '#/yearly',      visibility: 'admin' },
+  { key: 'qr',          label: 'QR',          href: '#/qr',          visibility: 'admin' },
   { key: 'members',     label: 'Tagok',       href: '#/members',     visibility: 'admin' },
   { key: 'accounting',  label: 'Elszámolás',  href: '#/accounting',  visibility: 'admin' },
   { key: 'payments',    label: 'Befizetések', href: '#/payments',    visibility: 'admin' },
@@ -54,6 +54,7 @@ const TABS: TabDef[] = [
 const PAGE_LABEL: Record<PageKey, string> = {
   overview:    'Alkalmak',
   profile:     'Profil',
+  me:          'Saját',
   database:    'Adatbázis',
   yearly:      'Statisztikák',
   qr:          'Check-in',
@@ -67,13 +68,11 @@ const PAGE_LABEL: Record<PageKey, string> = {
 
 export function renderHeader(currentPage: PageKey): string {
   const auth = getAuthState();
-  const isLoggedIn = !!auth.user;
   const isAdmin = auth.isAdmin;
 
   const tabs = TABS.filter((t) => {
     if (t.visibility === 'always') return true;
     if (t.visibility === 'transient') return t.key === currentPage; // csak ha rajta vagyunk
-    if (t.visibility === 'authed') return isLoggedIn;
     if (t.visibility === 'admin') return isAdmin;
     return false;
   })
@@ -173,13 +172,13 @@ function renderAuthBlock(): string {
 
   return `
     <div class="flex items-center gap-2 relative">
-      <div class="relative" title="${escapeHtml(name)}">
-        <div class="w-8 h-8 rounded-full flex items-center justify-center text-[10px] font-semibold"
+      <a href="#/me" id="header-avatar-link" class="relative no-underline" title="Saját — ${escapeHtml(name)}" aria-label="Saját oldal">
+        <div class="w-8 h-8 rounded-full flex items-center justify-center text-[10px] font-semibold transition-transform hover:scale-105"
              style="background:color-mix(in oklab, var(--accent) 16%, transparent); color:var(--accent-ink)">
           ${escapeHtml(initials)}
         </div>
         ${adminBadge}
-      </div>
+      </a>
       <button id="header-signout"
         class="text-[11px] font-medium text-fg-2 hover:text-fg-1 transition-colors">
         Kilépés

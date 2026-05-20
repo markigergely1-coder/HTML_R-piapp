@@ -1,0 +1,706 @@
+/**
+ * 👤 Saját oldal — bejelentkezett user-eknek.
+ *
+ * Tartalom:
+ *   - Hero kártya (név + email + admin badge)
+ *   - Következő alkalom: Jövök / Lemondom + vendéghozzáadás
+ *   - Múltbeli alkalom (csak ha 21:00 után): Voltam ott + vendég
+ *   - Értesítés beállítások (Phase B-ig greyed out)
+ *   - Profil: név átírás
+ *
+ * Avatar-kattintásból érhető el a header-ből (#/me).
+ */
+
+import { renderHeader } from '../components/header';
+import { getAuthState, signIn } from '../lib/auth';
+import { getInitials } from '../lib/avatar';
+import {
+  pastTuesdaysForDisplay,
+  generateTuesdayDates,
+  upcomingTuesday,
+  formatDateHuLong,
+  formatMonthShortHu,
+  dayOf,
+  todayInHungary,
+  weekdayOf,
+  currentHourInHungary,
+} from '../lib/dates';
+import {
+  getMemberByEmail,
+  getAttendanceForPlayer,
+  updateMember,
+  updateMemberPrefs,
+  addAttendanceBatch,
+  upsertSelfRegistration,
+  deleteAttendanceForPlayerOnDate,
+  DEFAULT_NOTIFICATION_PREFS,
+  type Member,
+  type MemberNotificationPrefs,
+  type NewAttendanceRow,
+} from '../lib/firestore';
+import { logEvent } from '../lib/logger';
+
+interface MeState {
+  member: Member;
+  myAttendance: Set<string>;        // datok ahol már Yes vagyok
+  nextDate: string;                 // a következő jövőbeli kedd
+  pastDate: string | null;          // a legutóbbi lezárult kedd (kedd 21:00 után), különben null
+  guestMode: boolean;               // a következő alkalomhoz nyit a vendég-form
+  guestCount: number;               // hány vendég
+  guestNames: string[];             // a vendég nevek (hossza = guestCount)
+  pastGuestMode: boolean;           // a múltbeli kártyán nyit a vendég-form
+  pastGuestCount: number;
+  pastGuestNames: string[];
+  nameEdit: string;                 // editálás közben
+  prefs: MemberNotificationPrefs;
+  saving: boolean;
+  toast: { kind: 'success' | 'error' | 'info'; msg: string } | null;
+}
+
+let toastTimer: number | null = null;
+
+// ─────────────────────────────────────────────────────────────────
+// Belépési pont
+// ─────────────────────────────────────────────────────────────────
+
+export async function renderMePage(container: HTMLElement): Promise<void> {
+  container.innerHTML = renderShell(renderLoadingBody());
+
+  const auth = getAuthState();
+  if (auth.loading) return;
+  if (!auth.user) return showSignInGate(container);
+
+  // Member rekord (auto-create az auth.ts-ben fut, ide már létrejöttként érkezik)
+  const email = auth.user.email ?? '';
+  const member = await getMemberByEmail(email);
+  if (!member) {
+    // Ritka edge case: auth.ts még nem fejezte be az ensureMemberExists-et
+    // Néhány másodperc múlva próbáld újra
+    container.innerHTML = renderShell(`
+      <div class="px-5 pt-12 text-center fade-up">
+        <div class="text-3xl mb-3">⏳</div>
+        <p class="text-[15px] text-fg-1">Profilod készítése folyamatban…</p>
+        <p class="text-[12px] text-fg-3 mt-2">Pár másodperc és frissíthetsz.</p>
+        <button onclick="location.reload()" class="mt-4 px-4 py-2 rounded-full text-white text-[13px] font-semibold" style="background:var(--accent)">
+          Frissítés
+        </button>
+      </div>`);
+    return;
+  }
+
+  // Saját attendance — hogy lássuk hol van már Yes
+  const records = await getAttendanceForPlayer(member.name);
+  const myAttendance = new Set(records.filter((r) => r.status === 'Yes' && r.event_date).map((r) => r.event_date));
+
+  // Jövőbeli kedd: a következő hét keddje (vagy ma ha kedd 21:00 előtt)
+  const futureCandidates = generateTuesdayDates(0, 2);
+  const today = todayInHungary();
+  const isTuesday = weekdayOf(today) === 2;
+  const hour = currentHourInHungary();
+  // Ha ma kedd ÉS 21:00 előtt — még jövőbeli (ma este lesz az edzés)
+  const nextDate = isTuesday && hour < 21
+    ? today
+    : upcomingTuesday(futureCandidates);
+
+  // Múltbeli kedd: a legutóbbi LEZÁRULT kedd (csak 21:00 után jelenik meg)
+  // Ha ma kedd és >= 21:00 → ma a "lezárult". Egyébként → előző kedd.
+  const pastDates = pastTuesdaysForDisplay(1);
+  const lastPast = pastDates[pastDates.length - 1] ?? null;
+  // A múltbeli kártya csak akkor jelenik meg, ha ténylegesen ELMÚLT alkalom (nem ugyanaz mint nextDate)
+  const pastDate = lastPast && lastPast !== nextDate ? lastPast : null;
+
+  const state: MeState = {
+    member,
+    myAttendance,
+    nextDate,
+    pastDate,
+    guestMode: false,
+    guestCount: 1,
+    guestNames: [''],
+    pastGuestMode: false,
+    pastGuestCount: 1,
+    pastGuestNames: [''],
+    nameEdit: member.name,
+    prefs: member.prefs?.notifications ?? { ...DEFAULT_NOTIFICATION_PREFS },
+    saving: false,
+    toast: null,
+  };
+
+  // Deep-link param: ?action=add-guest (Phase D-ben jön push-ból)
+  const params = new URLSearchParams(window.location.hash.split('?')[1] ?? '');
+  if (params.get('action') === 'add-guest') {
+    state.guestMode = true;
+    state.guestCount = 1;
+    state.guestNames = [''];
+  }
+
+  rerender(container, state);
+}
+
+// ─────────────────────────────────────────────────────────────────
+// Shell + gate
+// ─────────────────────────────────────────────────────────────────
+
+function renderShell(body: string): string {
+  return `
+    <div class="device">
+      ${renderHeader('me')}
+      <main id="me-body">${body}</main>
+    </div>`;
+}
+
+function renderLoadingBody(): string {
+  return `
+    <div class="px-5 pt-5 space-y-3">
+      <div class="h-32 rounded-[28px] animate-pulse" style="background:var(--line)"></div>
+      <div class="h-40 rounded-[22px] animate-pulse" style="background:var(--line)"></div>
+      <div class="h-40 rounded-[22px] animate-pulse" style="background:var(--line)"></div>
+    </div>`;
+}
+
+function showSignInGate(container: HTMLElement): void {
+  container.innerHTML = renderShell(`
+    <div class="px-5 pt-5 pb-12 fade-up">
+      <div class="card relative p-6 text-center overflow-hidden" style="border-radius:24px">
+        <div class="halo"></div>
+        <div class="relative">
+          <div class="w-16 h-16 mx-auto rounded-2xl flex items-center justify-center mb-4"
+               style="background:color-mix(in oklab,var(--accent) 14%,transparent)">
+            <span class="text-3xl">👤</span>
+          </div>
+          <p class="text-[17px] font-semibold text-fg-1 mb-1">Saját oldal</p>
+          <p class="text-[13px] text-fg-3 mb-4">Jelentkezz be a saját regisztrációhoz és értesítésekhez.</p>
+          <button id="gate-signin"
+            class="inline-flex items-center gap-2 px-5 py-2.5 rounded-full text-white text-[13px] font-semibold shadow-sm"
+            style="background:var(--accent)">
+            Bejelentkezés
+          </button>
+        </div>
+      </div>
+    </div>`);
+  container.querySelector<HTMLButtonElement>('#gate-signin')?.addEventListener('click', () => {
+    signIn().catch((e) => console.warn(e));
+  });
+}
+
+// ─────────────────────────────────────────────────────────────────
+// Body
+// ─────────────────────────────────────────────────────────────────
+
+function renderBody(state: MeState): string {
+  return `
+    <div class="px-5 pt-5 pb-12 space-y-4">
+      ${renderHero(state)}
+      ${renderNextEventCard(state)}
+      ${state.pastDate ? renderPastEventCard(state) : ''}
+      ${renderNotificationCard(state)}
+      ${renderProfileCard(state)}
+      ${state.toast ? renderToast(state.toast) : ''}
+    </div>`;
+}
+
+// ─── Hero ───
+function renderHero(state: MeState): string {
+  const auth = getAuthState();
+  const isAdmin = auth.isAdmin;
+  const hue = avatarHue(state.member.name);
+  const initials = getInitials(state.member.name);
+
+  return `
+    <section class="fade-up">
+      <div class="card relative p-5 overflow-hidden" style="border-radius:24px">
+        <div class="absolute inset-0 opacity-90"
+             style="background:radial-gradient(120% 80% at 90% 0%,color-mix(in oklab,var(--accent) 14%,transparent) 0%,transparent 60%)"></div>
+        <div class="relative flex items-center gap-4">
+          <div class="rounded-full flex items-center justify-center flex-shrink-0 font-semibold text-[20px]"
+               style="width:64px;height:64px;background:linear-gradient(135deg,hsl(${hue} 80% 88%) 0%,hsl(${(hue+30)%360} 75% 78%) 100%);color:hsl(${hue} 60% 30%)">
+            ${eh(initials)}
+          </div>
+          <div class="min-w-0 flex-1">
+            <p class="text-[20px] font-semibold tracking-tight text-fg-1 truncate">${eh(state.member.name)}</p>
+            <p class="text-[12px] text-fg-3 font-mono-tnum truncate">${eh(state.member.email)}</p>
+            ${isAdmin ? `<span class="inline-block mt-1 text-[10px] font-semibold px-2 py-0.5 rounded-full" style="background:color-mix(in oklab,#10b981 14%,transparent);color:#047857">ADMIN</span>` : ''}
+          </div>
+        </div>
+      </div>
+    </section>`;
+}
+
+// ─── Következő alkalom ───
+function renderNextEventCard(state: MeState): string {
+  const isGoing = state.myAttendance.has(state.nextDate);
+  const dateLong = formatDateHuLong(state.nextDate);
+  const day = dayOf(state.nextDate);
+  const month = formatMonthShortHu(state.nextDate);
+
+  // Vendég-form (ha nyitva van)
+  const guestForm = state.guestMode ? renderGuestForm(state, 'future') : '';
+
+  return `
+    <section class="fade-up" style="animation-delay:80ms">
+      <div class="flex items-end justify-between mb-3">
+        <h2 class="text-[20px] font-semibold tracking-tight text-fg-1">Következő alkalom</h2>
+        <span class="eyebrow">${state.nextDate}</span>
+      </div>
+      <div class="card p-5" style="border-radius:22px">
+        <div class="flex items-center gap-4 mb-4">
+          <div class="flex flex-col items-center flex-shrink-0" style="min-width:44px">
+            <span class="text-[10px] font-semibold uppercase tracking-widest" style="color:var(--accent-ink)">${month}</span>
+            <span class="font-mono-tnum font-bold text-[28px] leading-tight text-fg-1">${day}</span>
+          </div>
+          <div class="min-w-0 flex-1">
+            <p class="text-[14px] font-semibold text-fg-1 capitalize">${eh(dateLong.split(',')[1]?.trim() ?? '')}</p>
+            <p class="text-[11px] text-fg-3 mt-0.5">${isGoing ? '✓ Már jelentkeztél' : 'Még nem jelentkeztél'}</p>
+          </div>
+        </div>
+
+        <div class="flex flex-col gap-2">
+          ${isGoing
+            ? `<button id="me-cancel-next" type="button" ${state.saving ? 'disabled' : ''}
+                class="w-full px-4 py-3 rounded-full text-[14px] font-semibold transition-colors ${state.saving ? 'opacity-60 cursor-not-allowed' : ''}"
+                style="background:color-mix(in oklab,var(--danger) 12%,transparent);color:var(--danger-ink);border:1.5px solid color-mix(in oklab,var(--danger) 30%,transparent)">
+                ${state.saving ? 'Mentés…' : '✗ Lemondom'}
+              </button>`
+            : `<button id="me-register-next" type="button" ${state.saving ? 'disabled' : ''}
+                class="w-full px-4 py-3 rounded-full text-white text-[14px] font-semibold transition-colors ${state.saving ? 'opacity-60 cursor-not-allowed' : ''}"
+                style="background:var(--accent)">
+                ${state.saving ? 'Mentés…' : '✓ Jövök'}
+              </button>`
+          }
+          <button id="me-toggle-guest" type="button" ${state.saving ? 'disabled' : ''}
+            class="w-full px-4 py-2.5 rounded-full text-[13px] font-semibold transition-colors"
+            style="background:var(--bg-elev);color:var(--fg-1);border:1px solid var(--line-strong)">
+            ${state.guestMode ? '× Vendéget mégse hozok' : '🙋 Vendéggel jövök'}
+          </button>
+        </div>
+
+        ${guestForm}
+      </div>
+    </section>`;
+}
+
+// ─── Múltbeli alkalom ───
+function renderPastEventCard(state: MeState): string {
+  if (!state.pastDate) return '';
+  const wasThere = state.myAttendance.has(state.pastDate);
+  const dateLong = formatDateHuLong(state.pastDate);
+  const day = dayOf(state.pastDate);
+  const month = formatMonthShortHu(state.pastDate);
+
+  const guestForm = state.pastGuestMode ? renderGuestForm(state, 'past') : '';
+
+  return `
+    <section class="fade-up" style="animation-delay:120ms">
+      <div class="flex items-end justify-between mb-3">
+        <h2 class="text-[20px] font-semibold tracking-tight text-fg-1">Múltbeli alkalom</h2>
+        <span class="eyebrow">${state.pastDate}</span>
+      </div>
+      <div class="card p-5" style="border-radius:22px">
+        <div class="flex items-center gap-4 mb-4">
+          <div class="flex flex-col items-center flex-shrink-0" style="min-width:44px">
+            <span class="text-[10px] font-semibold uppercase tracking-widest text-fg-3">${month}</span>
+            <span class="font-mono-tnum font-bold text-[28px] leading-tight text-fg-2">${day}</span>
+          </div>
+          <div class="min-w-0 flex-1">
+            <p class="text-[14px] font-semibold text-fg-1 capitalize">${eh(dateLong.split(',')[1]?.trim() ?? '')}</p>
+            <p class="text-[11px] text-fg-3 mt-0.5">${wasThere ? '✓ Voltál ott' : 'Még nem jelezted, ott voltál-e'}</p>
+          </div>
+        </div>
+
+        ${wasThere
+          ? `<p class="text-[12px] text-fg-3 text-center">Köszi a regisztrációt! 🏐</p>`
+          : `<button id="me-register-past" type="button" ${state.saving ? 'disabled' : ''}
+              class="w-full px-4 py-3 rounded-full text-white text-[14px] font-semibold transition-colors mb-2"
+              style="background:var(--accent)">
+              ${state.saving ? 'Mentés…' : '✓ Igen, ott voltam'}
+            </button>`
+        }
+        <button id="me-toggle-past-guest" type="button" ${state.saving ? 'disabled' : ''}
+          class="w-full px-4 py-2.5 rounded-full text-[13px] font-semibold transition-colors"
+          style="background:var(--bg-elev);color:var(--fg-1);border:1px solid var(--line-strong)">
+          ${state.pastGuestMode ? '× Vendéget mégse adok hozzá' : '🙋 Vendéget hoztam'}
+        </button>
+
+        ${guestForm}
+      </div>
+    </section>`;
+}
+
+// ─── Vendég-form (közös) ───
+function renderGuestForm(state: MeState, mode: 'future' | 'past'): string {
+  const count = mode === 'future' ? state.guestCount : state.pastGuestCount;
+  const names = mode === 'future' ? state.guestNames : state.pastGuestNames;
+  const prefix = mode === 'future' ? 'me-g' : 'me-pg';
+  const MAX = 5;
+
+  const nameInputs = Array.from({ length: count }, (_, i) => `
+    <input type="text" data-guest-idx="${i}" id="${prefix}-name-${i}"
+      class="${prefix}-name w-full rounded-[12px] border px-3 py-2 text-[13px] text-fg-1 placeholder-fg-3 focus:outline-none"
+      style="border-color:var(--line-strong); background:var(--bg-card)"
+      value="${ea(names[i] ?? '')}" placeholder="${i + 1}. vendég neve" />
+  `).join('');
+
+  return `
+    <div class="mt-4 pt-4 border-t hairline space-y-3">
+      <div class="flex items-center justify-between">
+        <span class="text-[12px] font-semibold text-fg-1">Vendégek</span>
+        <div class="flex items-center gap-2">
+          <button id="${prefix}-dec" type="button" class="w-7 h-7 rounded-full flex items-center justify-center text-[16px] font-bold transition-colors"
+            style="background:var(--bg-elev);color:var(--fg-1);border:1px solid var(--line-strong)" ${count <= 1 ? 'disabled' : ''}>−</button>
+          <span class="font-mono-tnum text-[14px] font-semibold text-fg-1 w-6 text-center">${count}</span>
+          <button id="${prefix}-inc" type="button" class="w-7 h-7 rounded-full flex items-center justify-center text-[16px] font-bold transition-colors"
+            style="background:var(--bg-elev);color:var(--fg-1);border:1px solid var(--line-strong)" ${count >= MAX ? 'disabled' : ''}>+</button>
+        </div>
+      </div>
+      <div class="space-y-2">${nameInputs}</div>
+      <button id="${prefix}-save" type="button" ${state.saving ? 'disabled' : ''}
+        class="w-full px-4 py-2.5 rounded-full text-white text-[13px] font-semibold transition-colors ${state.saving ? 'opacity-60 cursor-not-allowed' : ''}"
+        style="background:var(--accent)">
+        ${state.saving ? 'Mentés…' : `Hozzáadás (${count} vendég)`}
+      </button>
+    </div>`;
+}
+
+// ─── Notification settings (Phase A: greyed out) ───
+function renderNotificationCard(state: MeState): string {
+  const disabled = true; // Phase A: minden disabled
+  const dimStyle = `opacity:0.55;pointer-events:none`;
+  const p = state.prefs;
+
+  const eventToggle = (key: keyof MemberNotificationPrefs['events'], label: string) => `
+    <label class="flex items-center justify-between gap-3 py-2" style="${dimStyle}">
+      <span class="text-[13px] text-fg-1">${label}</span>
+      <input type="checkbox" data-pref-event="${key}" ${p.events[key] ? 'checked' : ''} disabled
+        class="w-4 h-4 rounded" style="accent-color:var(--accent)" />
+    </label>`;
+
+  return `
+    <section class="fade-up" style="animation-delay:160ms">
+      <div class="flex items-end justify-between mb-3">
+        <h2 class="text-[20px] font-semibold tracking-tight text-fg-1">Értesítések</h2>
+        <span class="eyebrow" style="color:#b45309;background:color-mix(in oklab,#f59e0b 14%,transparent);padding:2px 8px;border-radius:999px">Hamarosan</span>
+      </div>
+      <div class="card p-4 space-y-3" style="border-radius:22px">
+        <label class="flex items-center justify-between gap-3 cursor-pointer" style="${disabled ? dimStyle : ''}">
+          <div>
+            <p class="text-[14px] font-semibold text-fg-1">Push értesítések</p>
+            <p class="text-[11px] text-fg-3 mt-0.5">Telefonra/asztali appra érkezik értesítés</p>
+          </div>
+          <input type="checkbox" id="me-pref-enabled" ${p.enabled ? 'checked' : ''} disabled
+            class="w-5 h-5 rounded" style="accent-color:var(--accent)" />
+        </label>
+
+        <div class="pt-3 border-t hairline">
+          <p class="eyebrow text-[10px] mb-2">Mely eseményről értesüljek?</p>
+          ${eventToggle('tuesdayReminder', 'Kedd reggeli emlékeztető')}
+          ${eventToggle('cancellation', 'Edzés lemondva')}
+          ${eventToggle('fullTeam', 'Megvan a 8 fő')}
+          ${eventToggle('newRegistration', 'Új jelentkező')}
+          ${eventToggle('payment', 'Befizetési emlékeztető')}
+        </div>
+
+        <div class="pt-3 border-t hairline space-y-2" style="${dimStyle}">
+          <label class="flex items-center justify-between">
+            <span class="text-[13px] text-fg-1">Emlékeztető időpontja</span>
+            <input type="time" value="${p.reminderTime}" disabled
+              class="rounded-[10px] border px-2 py-1 text-[12px] font-mono-tnum text-fg-1"
+              style="border-color:var(--line-strong); background:var(--bg-card)" />
+          </label>
+          <label class="flex items-center justify-between">
+            <span class="text-[13px] text-fg-1">Csendes órák</span>
+            <input type="checkbox" ${p.quietHours.enabled ? 'checked' : ''} disabled
+              class="w-4 h-4 rounded" style="accent-color:var(--accent)" />
+          </label>
+          <div class="flex items-center justify-between gap-2 pl-4">
+            <input type="time" value="${p.quietHours.from}" disabled
+              class="rounded-[10px] border px-2 py-1 text-[12px] font-mono-tnum text-fg-1 flex-1"
+              style="border-color:var(--line-strong); background:var(--bg-card)" />
+            <span class="text-[11px] text-fg-3">—</span>
+            <input type="time" value="${p.quietHours.to}" disabled
+              class="rounded-[10px] border px-2 py-1 text-[12px] font-mono-tnum text-fg-1 flex-1"
+              style="border-color:var(--line-strong); background:var(--bg-card)" />
+          </div>
+        </div>
+
+        <p class="text-[11px] text-fg-3 text-center pt-2">A push értesítések hamarosan elérhetők. Most a beállításokat be tudod állítani, és majd amikor élesedik, automatikusan érvénybe lépnek.</p>
+      </div>
+    </section>`;
+}
+
+// ─── Profil (név átírás) ───
+function renderProfileCard(state: MeState): string {
+  const changed = state.nameEdit.trim() !== state.member.name && state.nameEdit.trim().length > 0;
+  return `
+    <section class="fade-up" style="animation-delay:200ms">
+      <div class="flex items-end justify-between mb-3">
+        <h2 class="text-[20px] font-semibold tracking-tight text-fg-1">Profil</h2>
+      </div>
+      <div class="card p-4" style="border-radius:22px">
+        <label class="block">
+          <span class="text-[10px] font-semibold text-fg-3 block mb-1">Megjelenítendő név</span>
+          <input id="me-name-input" type="text" value="${ea(state.nameEdit)}"
+            class="w-full rounded-[12px] border px-3 py-2.5 text-[14px] text-fg-1 focus:outline-none"
+            style="border-color:var(--line-strong); background:var(--bg-card)" />
+        </label>
+        ${changed
+          ? `<button id="me-name-save" type="button" ${state.saving ? 'disabled' : ''}
+              class="mt-3 w-full px-4 py-2 rounded-full text-white text-[13px] font-semibold transition-colors ${state.saving ? 'opacity-60 cursor-not-allowed' : ''}"
+              style="background:var(--accent)">
+              ${state.saving ? 'Mentés…' : 'Név mentése'}
+            </button>`
+          : ''
+        }
+      </div>
+    </section>`;
+}
+
+// ─── Toast ───
+function renderToast(toast: NonNullable<MeState['toast']>): string {
+  const palette = toast.kind === 'success'
+    ? 'background:color-mix(in oklab,#10b981 14%,var(--bg-card));border:1px solid color-mix(in oklab,#10b981 30%,var(--line));color:#047857'
+    : toast.kind === 'error'
+      ? 'background:color-mix(in oklab,var(--danger) 14%,var(--bg-card));border:1px solid color-mix(in oklab,var(--danger) 30%,var(--line));color:var(--danger-ink)'
+      : 'background:color-mix(in oklab,#0ea5e9 14%,var(--bg-card));border:1px solid color-mix(in oklab,#0ea5e9 30%,var(--line));color:#0369a1';
+  return `
+    <div id="toast" class="fixed left-1/2 -translate-x-1/2 z-50 px-4 py-2.5 rounded-full shadow-lg text-[12.5px] font-semibold fade-up"
+      style="bottom:24px;${palette}">${eh(toast.msg)}</div>`;
+}
+
+// ─────────────────────────────────────────────────────────────────
+// Handlers
+// ─────────────────────────────────────────────────────────────────
+
+function rerender(container: HTMLElement, state: MeState) {
+  const body = container.querySelector<HTMLElement>('#me-body')!;
+  body.innerHTML = renderBody(state);
+  attachHandlers(container, state);
+  if (state.toast) {
+    if (toastTimer) window.clearTimeout(toastTimer);
+    toastTimer = window.setTimeout(() => {
+      state.toast = null;
+      rerender(container, state);
+    }, 2500);
+  }
+}
+
+function attachHandlers(container: HTMLElement, state: MeState) {
+  // Jövőbeli: Jövök / Lemondom
+  container.querySelector<HTMLButtonElement>('#me-register-next')?.addEventListener('click', () => {
+    void handleRegisterNext(container, state, 'Yes');
+  });
+  container.querySelector<HTMLButtonElement>('#me-cancel-next')?.addEventListener('click', () => {
+    void handleRegisterNext(container, state, 'No');
+  });
+
+  // Vendég toggle
+  container.querySelector<HTMLButtonElement>('#me-toggle-guest')?.addEventListener('click', () => {
+    state.guestMode = !state.guestMode;
+    if (state.guestMode && state.guestNames.length === 0) {
+      state.guestCount = 1;
+      state.guestNames = [''];
+    }
+    rerender(container, state);
+  });
+
+  // Vendég stepper + nevek (jövőbeli)
+  container.querySelector<HTMLButtonElement>('#me-g-dec')?.addEventListener('click', () => {
+    if (state.guestCount <= 1) return;
+    state.guestCount--;
+    state.guestNames.length = state.guestCount;
+    rerender(container, state);
+  });
+  container.querySelector<HTMLButtonElement>('#me-g-inc')?.addEventListener('click', () => {
+    if (state.guestCount >= 5) return;
+    state.guestCount++;
+    state.guestNames.push('');
+    rerender(container, state);
+  });
+  container.querySelectorAll<HTMLInputElement>('.me-g-name').forEach((inp) => {
+    inp.addEventListener('input', () => {
+      const idx = Number(inp.dataset.guestIdx);
+      state.guestNames[idx] = inp.value;
+    });
+  });
+  container.querySelector<HTMLButtonElement>('#me-g-save')?.addEventListener('click', () => {
+    void handleGuestSave(container, state, 'future');
+  });
+
+  // Múltbeli: Voltam ott
+  container.querySelector<HTMLButtonElement>('#me-register-past')?.addEventListener('click', () => {
+    void handleRegisterPast(container, state);
+  });
+  container.querySelector<HTMLButtonElement>('#me-toggle-past-guest')?.addEventListener('click', () => {
+    state.pastGuestMode = !state.pastGuestMode;
+    if (state.pastGuestMode && state.pastGuestNames.length === 0) {
+      state.pastGuestCount = 1;
+      state.pastGuestNames = [''];
+    }
+    rerender(container, state);
+  });
+  // Múltbeli vendég stepper
+  container.querySelector<HTMLButtonElement>('#me-pg-dec')?.addEventListener('click', () => {
+    if (state.pastGuestCount <= 1) return;
+    state.pastGuestCount--;
+    state.pastGuestNames.length = state.pastGuestCount;
+    rerender(container, state);
+  });
+  container.querySelector<HTMLButtonElement>('#me-pg-inc')?.addEventListener('click', () => {
+    if (state.pastGuestCount >= 5) return;
+    state.pastGuestCount++;
+    state.pastGuestNames.push('');
+    rerender(container, state);
+  });
+  container.querySelectorAll<HTMLInputElement>('.me-pg-name').forEach((inp) => {
+    inp.addEventListener('input', () => {
+      const idx = Number(inp.dataset.guestIdx);
+      state.pastGuestNames[idx] = inp.value;
+    });
+  });
+  container.querySelector<HTMLButtonElement>('#me-pg-save')?.addEventListener('click', () => {
+    void handleGuestSave(container, state, 'past');
+  });
+
+  // Profil: név átírás
+  container.querySelector<HTMLInputElement>('#me-name-input')?.addEventListener('input', (e) => {
+    state.nameEdit = (e.target as HTMLInputElement).value;
+    // Csak a card frissül (nem teljes re-render, hogy a fókusz maradjon)
+    const card = container.querySelector<HTMLElement>('#me-name-input')?.closest('section');
+    if (card) {
+      const saveBtn = card.querySelector<HTMLButtonElement>('#me-name-save');
+      const shouldShow = state.nameEdit.trim() !== state.member.name && state.nameEdit.trim().length > 0;
+      if (shouldShow && !saveBtn) rerender(container, state);
+      if (!shouldShow && saveBtn) saveBtn.remove();
+    }
+  });
+  container.querySelector<HTMLButtonElement>('#me-name-save')?.addEventListener('click', () => {
+    void handleNameSave(container, state);
+  });
+}
+
+// ─────────────────────────────────────────────────────────────────
+// Actions
+// ─────────────────────────────────────────────────────────────────
+
+async function handleRegisterNext(container: HTMLElement, state: MeState, status: 'Yes' | 'No') {
+  if (state.saving) return;
+  state.saving = true;
+  rerender(container, state);
+  try {
+    await upsertSelfRegistration(state.member.name, state.nextDate, status);
+    if (status === 'Yes') state.myAttendance.add(state.nextDate);
+    else state.myAttendance.delete(state.nextDate);
+    state.toast = { kind: 'success', msg: status === 'Yes' ? '✓ Sikeresen jelentkeztél!' : '✗ Lemondtad' };
+    void logEvent('info', 'Self registration', { name: state.member.name, date: state.nextDate, status });
+  } catch (err) {
+    state.toast = { kind: 'error', msg: `Hiba: ${err instanceof Error ? err.message : String(err)}` };
+  } finally {
+    state.saving = false;
+    rerender(container, state);
+  }
+}
+
+async function handleRegisterPast(container: HTMLElement, state: MeState) {
+  if (state.saving || !state.pastDate) return;
+  state.saving = true;
+  rerender(container, state);
+  try {
+    await upsertSelfRegistration(state.member.name, state.pastDate, 'Yes');
+    state.myAttendance.add(state.pastDate);
+    state.toast = { kind: 'success', msg: '✓ Hozzáadva' };
+    void logEvent('info', 'Self registration (past)', { name: state.member.name, date: state.pastDate });
+  } catch (err) {
+    state.toast = { kind: 'error', msg: `Hiba: ${err instanceof Error ? err.message : String(err)}` };
+  } finally {
+    state.saving = false;
+    rerender(container, state);
+  }
+}
+
+async function handleGuestSave(container: HTMLElement, state: MeState, mode: 'future' | 'past') {
+  if (state.saving) return;
+  const date = mode === 'future' ? state.nextDate : state.pastDate;
+  if (!date) return;
+
+  const names = mode === 'future' ? state.guestNames : state.pastGuestNames;
+  const cleanNames = names.map((n) => n.trim()).filter((n) => n.length > 0);
+  if (cleanNames.length === 0) {
+    state.toast = { kind: 'error', msg: 'Adj meg legalább egy nevet' };
+    rerender(container, state);
+    return;
+  }
+
+  state.saving = true;
+  rerender(container, state);
+  try {
+    const rows: NewAttendanceRow[] = cleanNames.map((name) => ({
+      name,
+      status: 'Yes',
+      event_date: date,
+      mode: 'valós',
+    }));
+    await addAttendanceBatch(rows);
+    if (mode === 'future') {
+      state.guestMode = false;
+      state.guestNames = [''];
+      state.guestCount = 1;
+    } else {
+      state.pastGuestMode = false;
+      state.pastGuestNames = [''];
+      state.pastGuestCount = 1;
+    }
+    state.toast = { kind: 'success', msg: `✓ ${cleanNames.length} vendég hozzáadva` };
+    void logEvent('info', 'Guests added by member', { byMember: state.member.name, date, guests: cleanNames });
+  } catch (err) {
+    state.toast = { kind: 'error', msg: `Hiba: ${err instanceof Error ? err.message : String(err)}` };
+  } finally {
+    state.saving = false;
+    rerender(container, state);
+  }
+}
+
+async function handleNameSave(container: HTMLElement, state: MeState) {
+  if (state.saving) return;
+  const newName = state.nameEdit.trim();
+  if (!newName || newName === state.member.name) return;
+  state.saving = true;
+  rerender(container, state);
+  try {
+    await updateMember(state.member.id, { name: newName });
+    state.member.name = newName;
+    state.toast = { kind: 'success', msg: '✓ Név frissítve' };
+    void logEvent('info', 'Member self-renamed', { id: state.member.id, newName });
+  } catch (err) {
+    state.toast = { kind: 'error', msg: `Hiba: ${err instanceof Error ? err.message : String(err)}` };
+  } finally {
+    state.saving = false;
+    rerender(container, state);
+  }
+}
+
+// Phase B-től használjuk — Phase A-ban placeholder
+async function _savePrefs(state: MeState) {
+  await updateMemberPrefs(state.member.id, { notifications: state.prefs });
+}
+void _savePrefs; // suppress unused warning Phase A-ban
+
+// Phase D-től használjuk — placeholder
+async function _deleteAttendance(name: string, date: string) {
+  await deleteAttendanceForPlayerOnDate(name, date);
+}
+void _deleteAttendance;
+
+// ─────────────────────────────────────────────────────────────────
+// Utils
+// ─────────────────────────────────────────────────────────────────
+
+function avatarHue(name: string): number {
+  let h = 0;
+  for (const c of name) h = (h * 31 + c.charCodeAt(0)) & 0xffffffff;
+  return Math.abs(h) % 360;
+}
+
+function eh(s: string): string {
+  return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;').replace(/'/g, '&#039;');
+}
+function ea(s: string): string { return eh(s); }
