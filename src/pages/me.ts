@@ -38,6 +38,16 @@ import {
   type MemberNotificationPrefs,
   type NewAttendanceRow,
 } from '../lib/firestore';
+import {
+  isPushSupported,
+  currentPermission,
+  subscribeToPush,
+  unsubscribeFromPush,
+  getMySubscriptions,
+  setSubscriptionEnabled,
+  deleteSubscription,
+  type PushSubscription,
+} from '../lib/notifications';
 import { logEvent } from '../lib/logger';
 
 interface MeState {
@@ -55,6 +65,12 @@ interface MeState {
   prefs: MemberNotificationPrefs;
   saving: boolean;
   toast: { kind: 'success' | 'error' | 'info'; msg: string } | null;
+  // Push notification state
+  pushSupported: boolean;
+  pushPermission: NotificationPermission;
+  subscriptions: PushSubscription[];
+  pushSubscribing: boolean;          // épp engedélykérés / token-szerzés folyik
+  showPushOptIn: boolean;            // soft-ask kártya nyitva
 }
 
 let toastTimer: number | null = null;
@@ -109,6 +125,12 @@ export async function renderMePage(container: HTMLElement): Promise<void> {
   // A múltbeli kártya csak akkor jelenik meg, ha ténylegesen ELMÚLT alkalom (nem ugyanaz mint nextDate)
   const pastDate = lastPast && lastPast !== nextDate ? lastPast : null;
 
+  // Push notification állapot (párhuzamos lekérés)
+  const [pushSupported, subscriptions] = await Promise.all([
+    isPushSupported(),
+    getMySubscriptions(member.id).catch(() => []),
+  ]);
+
   const state: MeState = {
     member,
     myAttendance,
@@ -124,6 +146,11 @@ export async function renderMePage(container: HTMLElement): Promise<void> {
     prefs: member.prefs?.notifications ?? { ...DEFAULT_NOTIFICATION_PREFS },
     saving: false,
     toast: null,
+    pushSupported,
+    pushPermission: currentPermission(),
+    subscriptions,
+    pushSubscribing: false,
+    showPushOptIn: false,
   };
 
   // Deep-link param: ?action=add-guest (Phase D-ben jön push-ból)
@@ -361,68 +388,161 @@ function renderGuestForm(state: MeState, mode: 'future' | 'past'): string {
     </div>`;
 }
 
-// ─── Notification settings (Phase A: greyed out) ───
+// ─── Notification settings ───
 function renderNotificationCard(state: MeState): string {
-  const disabled = true; // Phase A: minden disabled
-  const dimStyle = `opacity:0.55;pointer-events:none`;
   const p = state.prefs;
+  const enabled = p.enabled && state.subscriptions.length > 0;
 
-  const eventToggle = (key: keyof MemberNotificationPrefs['events'], label: string) => `
-    <label class="flex items-center justify-between gap-3 py-2" style="${dimStyle}">
-      <span class="text-[13px] text-fg-1">${label}</span>
-      <input type="checkbox" data-pref-event="${key}" ${p.events[key] ? 'checked' : ''} disabled
-        class="w-4 h-4 rounded" style="accent-color:var(--accent)" />
+  // Ha a böngésző nem támogatja, mutatunk egy magyarázó kártyát.
+  if (!state.pushSupported) {
+    return `
+      <section class="fade-up" style="animation-delay:160ms">
+        <div class="flex items-end justify-between mb-3">
+          <h2 class="text-[20px] font-semibold tracking-tight text-fg-1">Értesítések</h2>
+        </div>
+        <div class="card-soft p-4" style="border-radius:22px">
+          <p class="text-[13px] text-fg-1 font-semibold mb-1">⚠️ Ezen az eszközön nem támogatott</p>
+          <p class="text-[11.5px] text-fg-3 leading-relaxed">
+            iOS-en a push értesítés csak <b>telepített PWA-ban</b> működik (Add to Home Screen),
+            Safari böngészőben nem. Asztali Safari-n is hasonló a helyzet — Chrome-mal érdemes
+            megpróbálni. Android Chrome / desktop Chrome / Edge / Firefox: támogatva.
+          </p>
+        </div>
+      </section>`;
+  }
+
+  // Soft-ask kártya (master toggle ON-ra kattintva mielőtt permission promptot mutatunk)
+  if (state.showPushOptIn) {
+    return `
+      <section class="fade-up" style="animation-delay:160ms">
+        <div class="flex items-end justify-between mb-3">
+          <h2 class="text-[20px] font-semibold tracking-tight text-fg-1">Értesítések</h2>
+        </div>
+        <div class="card p-5" style="border-radius:22px">
+          <div class="w-14 h-14 mx-auto rounded-2xl flex items-center justify-center mb-3"
+               style="background:color-mix(in oklab,var(--accent) 14%,transparent)">
+            <span class="text-3xl">🔔</span>
+          </div>
+          <p class="text-[16px] font-semibold text-fg-1 text-center mb-2">Engedélyezed az értesítéseket?</p>
+          <p class="text-[12.5px] text-fg-3 text-center leading-relaxed mb-4">
+            Kedd reggelente emlékeztetünk, ha még nem jelentkeztél az edzésre, és szólunk ha lemondják.
+            Bármikor kikapcsolhatod a beállításokban.
+          </p>
+          <div class="flex flex-col gap-2">
+            <button id="me-push-allow" type="button" ${state.pushSubscribing ? 'disabled' : ''}
+              class="w-full px-4 py-2.5 rounded-full text-white text-[14px] font-semibold transition-colors ${state.pushSubscribing ? 'opacity-60 cursor-not-allowed' : ''}"
+              style="background:var(--accent)">
+              ${state.pushSubscribing ? 'Engedélykérés…' : 'Igen, engedélyezem'}
+            </button>
+            <button id="me-push-deny" type="button" ${state.pushSubscribing ? 'disabled' : ''}
+              class="w-full px-4 py-2.5 rounded-full text-[14px] font-semibold transition-colors"
+              style="background:var(--bg-elev);color:var(--fg-1);border:1px solid var(--line-strong)">
+              Most nem
+            </button>
+          </div>
+        </div>
+      </section>`;
+  }
+
+  // Permission denied — magyarázó kártya
+  const deniedNote = state.pushPermission === 'denied' && !enabled
+    ? `<div class="px-3 py-2 rounded-lg text-[11.5px]" style="background:color-mix(in oklab,var(--danger) 12%,transparent);color:var(--danger-ink)">
+         ⚠️ A böngésződ letiltotta az értesítéseket. Engedélyezni a böngésző beállításaiban tudod (címsor melletti zár ikon → Notifications → Allow).
+       </div>`
+    : '';
+
+  // Event-type toggle helper
+  const eventToggle = (key: keyof MemberNotificationPrefs['events'], label: string, sub?: string) => `
+    <label class="flex items-center justify-between gap-3 py-2 cursor-pointer ${!enabled ? 'opacity-55' : ''}">
+      <div>
+        <span class="text-[13px] text-fg-1">${label}</span>
+        ${sub ? `<p class="text-[10.5px] text-fg-3 mt-0.5">${sub}</p>` : ''}
+      </div>
+      <input type="checkbox" data-pref-event="${key}" ${p.events[key] ? 'checked' : ''} ${!enabled ? 'disabled' : ''}
+        class="w-4 h-4 rounded flex-shrink-0" style="accent-color:var(--accent)" />
     </label>`;
+
+  // Eszköz lista
+  const deviceList = state.subscriptions.length > 0 ? `
+    <div class="pt-3 border-t hairline">
+      <p class="eyebrow text-[10px] mb-2">Eszközök (${state.subscriptions.length})</p>
+      <ul class="space-y-1.5">
+        ${state.subscriptions.map((s) => `
+          <li class="flex items-center justify-between gap-2 py-1.5 px-2.5 rounded-lg" style="background:var(--bg-elev)">
+            <div class="flex-1 min-w-0">
+              <p class="text-[12px] font-semibold text-fg-1 truncate">${eh(s.device)}</p>
+              <p class="text-[10px] text-fg-3 font-mono-tnum truncate">${eh(s.token.slice(0, 16))}…</p>
+            </div>
+            <label class="flex items-center gap-2 cursor-pointer flex-shrink-0">
+              <input type="checkbox" data-sub-toggle="${s.id}" ${s.enabled ? 'checked' : ''}
+                class="w-4 h-4 rounded" style="accent-color:var(--accent)" />
+            </label>
+            <button data-sub-delete="${s.id}" type="button" class="p-1 rounded-md transition-colors hover:bg-[color:var(--line)]"
+              title="Eszköz eltávolítása" style="color:var(--fg-3)">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M3 6h18M8 6V4a2 2 0 012-2h4a2 2 0 012 2v2M6 6l1 14a2 2 0 002 2h6a2 2 0 002-2l1-14"/>
+              </svg>
+            </button>
+          </li>
+        `).join('')}
+      </ul>
+    </div>` : '';
 
   return `
     <section class="fade-up" style="animation-delay:160ms">
       <div class="flex items-end justify-between mb-3">
         <h2 class="text-[20px] font-semibold tracking-tight text-fg-1">Értesítések</h2>
-        <span class="eyebrow" style="color:#b45309;background:color-mix(in oklab,#f59e0b 14%,transparent);padding:2px 8px;border-radius:999px">Hamarosan</span>
+        ${enabled
+          ? `<span class="eyebrow" style="color:#047857;background:color-mix(in oklab,#10b981 14%,transparent);padding:2px 8px;border-radius:999px">Aktív</span>`
+          : ''
+        }
       </div>
       <div class="card p-4 space-y-3" style="border-radius:22px">
-        <label class="flex items-center justify-between gap-3 cursor-pointer" style="${disabled ? dimStyle : ''}">
+        <label class="flex items-center justify-between gap-3 cursor-pointer">
           <div>
             <p class="text-[14px] font-semibold text-fg-1">Push értesítések</p>
-            <p class="text-[11px] text-fg-3 mt-0.5">Telefonra/asztali appra érkezik értesítés</p>
+            <p class="text-[11px] text-fg-3 mt-0.5">${enabled ? `Aktív ezen az eszközön` : 'Telefonra / asztali appra érkezik értesítés'}</p>
           </div>
-          <input type="checkbox" id="me-pref-enabled" ${p.enabled ? 'checked' : ''} disabled
+          <input type="checkbox" id="me-pref-enabled" ${enabled ? 'checked' : ''}
+            ${state.pushSubscribing ? 'disabled' : ''}
             class="w-5 h-5 rounded" style="accent-color:var(--accent)" />
         </label>
+        ${deniedNote}
 
-        <div class="pt-3 border-t hairline">
+        ${deviceList}
+
+        <div class="pt-3 border-t hairline ${!enabled ? 'opacity-55' : ''}">
           <p class="eyebrow text-[10px] mb-2">Mely eseményről értesüljek?</p>
-          ${eventToggle('tuesdayReminder', 'Kedd reggeli emlékeztető')}
-          ${eventToggle('cancellation', 'Edzés lemondva')}
-          ${eventToggle('fullTeam', 'Megvan a 8 fő')}
-          ${eventToggle('newRegistration', 'Új jelentkező')}
-          ${eventToggle('payment', 'Befizetési emlékeztető')}
+          ${eventToggle('tuesdayReminder', 'Kedd reggeli emlékeztető', 'Ha még nem jelentkeztél')}
+          ${eventToggle('cancellation', 'Edzés lemondva', 'Azonnali értesítés')}
+          ${eventToggle('fullTeam', 'Megvan a 8 fő', 'Amikor összejön a csapat')}
+          ${eventToggle('newRegistration', 'Új jelentkező', 'Valaki most regisztrált')}
+          ${eventToggle('payment', 'Befizetési emlékeztető', 'Ha még tartozol')}
         </div>
 
-        <div class="pt-3 border-t hairline space-y-2" style="${dimStyle}">
-          <label class="flex items-center justify-between">
-            <span class="text-[13px] text-fg-1">Emlékeztető időpontja</span>
-            <input type="time" value="${p.reminderTime}" disabled
-              class="rounded-[10px] border px-2 py-1 text-[12px] font-mono-tnum text-fg-1"
-              style="border-color:var(--line-strong); background:var(--bg-card)" />
-          </label>
+        <div class="pt-3 border-t hairline space-y-2 ${!enabled ? 'opacity-55' : ''}">
           <label class="flex items-center justify-between">
             <span class="text-[13px] text-fg-1">Csendes órák</span>
-            <input type="checkbox" ${p.quietHours.enabled ? 'checked' : ''} disabled
+            <input type="checkbox" id="me-pref-quiet-enabled" ${p.quietHours.enabled ? 'checked' : ''} ${!enabled ? 'disabled' : ''}
               class="w-4 h-4 rounded" style="accent-color:var(--accent)" />
           </label>
-          <div class="flex items-center justify-between gap-2 pl-4">
-            <input type="time" value="${p.quietHours.from}" disabled
-              class="rounded-[10px] border px-2 py-1 text-[12px] font-mono-tnum text-fg-1 flex-1"
-              style="border-color:var(--line-strong); background:var(--bg-card)" />
-            <span class="text-[11px] text-fg-3">—</span>
-            <input type="time" value="${p.quietHours.to}" disabled
-              class="rounded-[10px] border px-2 py-1 text-[12px] font-mono-tnum text-fg-1 flex-1"
-              style="border-color:var(--line-strong); background:var(--bg-card)" />
-          </div>
+          ${p.quietHours.enabled ? `
+            <div class="flex items-center justify-between gap-2 pl-4">
+              <input id="me-pref-quiet-from" type="time" value="${p.quietHours.from}" ${!enabled ? 'disabled' : ''}
+                class="rounded-[10px] border px-2 py-1 text-[12px] font-mono-tnum text-fg-1 flex-1"
+                style="border-color:var(--line-strong); background:var(--bg-card)" />
+              <span class="text-[11px] text-fg-3">—</span>
+              <input id="me-pref-quiet-to" type="time" value="${p.quietHours.to}" ${!enabled ? 'disabled' : ''}
+                class="rounded-[10px] border px-2 py-1 text-[12px] font-mono-tnum text-fg-1 flex-1"
+                style="border-color:var(--line-strong); background:var(--bg-card)" />
+            </div>
+          ` : ''}
         </div>
 
-        <p class="text-[11px] text-fg-3 text-center pt-2">A push értesítések hamarosan elérhetők. Most a beállításokat be tudod állítani, és majd amikor élesedik, automatikusan érvénybe lépnek.</p>
+        <p class="text-[10.5px] text-fg-3 text-center pt-1">
+          Csapatszintű emlékeztető: <b>kedd 09:00</b> (Magyarország).
+          Egyénileg csak ki/be kapcsolható.
+        </p>
       </div>
     </section>`;
 }
@@ -560,6 +680,100 @@ function attachHandlers(container: HTMLElement, state: MeState) {
     void handleGuestSave(container, state, 'past');
   });
 
+  // ─── Notification settings ───
+
+  // Master toggle: ON → soft-ask kártya; OFF → unsubscribe
+  container.querySelector<HTMLInputElement>('#me-pref-enabled')?.addEventListener('change', (e) => {
+    const checked = (e.target as HTMLInputElement).checked;
+    if (checked) {
+      // Soft-ask kártya nyitása (a tényleges permission prompt csak ezután jön)
+      state.showPushOptIn = true;
+      rerender(container, state);
+    } else {
+      void handlePushUnsubscribe(container, state);
+    }
+  });
+
+  // Soft-ask: Igen, engedélyezem
+  container.querySelector<HTMLButtonElement>('#me-push-allow')?.addEventListener('click', () => {
+    state.showPushOptIn = false;
+    void handlePushSubscribe(container, state);
+  });
+
+  // Soft-ask: Most nem
+  container.querySelector<HTMLButtonElement>('#me-push-deny')?.addEventListener('click', () => {
+    state.showPushOptIn = false;
+    rerender(container, state);
+  });
+
+  // Event-type togglék (kedd reggel, lemondás stb.)
+  container.querySelectorAll<HTMLInputElement>('[data-pref-event]').forEach((cb) => {
+    cb.addEventListener('change', () => {
+      const key = cb.dataset.prefEvent as keyof MemberNotificationPrefs['events'];
+      if (!key) return;
+      state.prefs.events[key] = cb.checked;
+      // Az enabled mezőt is szinkronban tartjuk: ha legalább egy eszköz van + aktív, akkor enabled=true
+      state.prefs.enabled = state.subscriptions.some((s) => s.enabled);
+      void savePrefs(state);
+    });
+  });
+
+  // Csendes órák enabled
+  container.querySelector<HTMLInputElement>('#me-pref-quiet-enabled')?.addEventListener('change', (e) => {
+    state.prefs.quietHours.enabled = (e.target as HTMLInputElement).checked;
+    rerender(container, state);
+    void savePrefs(state);
+  });
+  // Csendes órák idő-mezők
+  container.querySelector<HTMLInputElement>('#me-pref-quiet-from')?.addEventListener('change', (e) => {
+    state.prefs.quietHours.from = (e.target as HTMLInputElement).value;
+    void savePrefs(state);
+  });
+  container.querySelector<HTMLInputElement>('#me-pref-quiet-to')?.addEventListener('change', (e) => {
+    state.prefs.quietHours.to = (e.target as HTMLInputElement).value;
+    void savePrefs(state);
+  });
+
+  // Eszköz lista: enabled toggle
+  container.querySelectorAll<HTMLInputElement>('[data-sub-toggle]').forEach((cb) => {
+    cb.addEventListener('change', async () => {
+      const subId = cb.dataset.subToggle;
+      if (!subId) return;
+      try {
+        await setSubscriptionEnabled(subId, cb.checked);
+        const sub = state.subscriptions.find((s) => s.id === subId);
+        if (sub) sub.enabled = cb.checked;
+        state.prefs.enabled = state.subscriptions.some((s) => s.enabled);
+        void savePrefs(state);
+        state.toast = { kind: 'success', msg: cb.checked ? 'Eszköz aktiválva' : 'Eszköz kikapcsolva' };
+        rerender(container, state);
+      } catch (err) {
+        state.toast = { kind: 'error', msg: `Hiba: ${String(err)}` };
+        rerender(container, state);
+      }
+    });
+  });
+
+  // Eszköz lista: delete
+  container.querySelectorAll<HTMLButtonElement>('[data-sub-delete]').forEach((btn) => {
+    btn.addEventListener('click', async () => {
+      const subId = btn.dataset.subDelete;
+      if (!subId) return;
+      if (!confirm('Biztosan eltávolítod ezt az eszközt a push listából?')) return;
+      try {
+        await deleteSubscription(subId);
+        state.subscriptions = state.subscriptions.filter((s) => s.id !== subId);
+        state.prefs.enabled = state.subscriptions.some((s) => s.enabled);
+        void savePrefs(state);
+        state.toast = { kind: 'success', msg: '🗑️ Eszköz eltávolítva' };
+        rerender(container, state);
+      } catch (err) {
+        state.toast = { kind: 'error', msg: `Hiba: ${String(err)}` };
+        rerender(container, state);
+      }
+    });
+  });
+
   // Profil: név átírás
   container.querySelector<HTMLInputElement>('#me-name-input')?.addEventListener('input', (e) => {
     state.nameEdit = (e.target as HTMLInputElement).value;
@@ -677,11 +891,68 @@ async function handleNameSave(container: HTMLElement, state: MeState) {
   }
 }
 
-// Phase B-től használjuk — Phase A-ban placeholder
-async function _savePrefs(state: MeState) {
-  await updateMemberPrefs(state.member.id, { notifications: state.prefs });
+// ─── Notification subscription handlers ───
+
+async function handlePushSubscribe(container: HTMLElement, state: MeState) {
+  if (state.pushSubscribing) return;
+  state.pushSubscribing = true;
+  rerender(container, state);
+  try {
+    const result = await subscribeToPush(state.member.id, state.member.email);
+    if (!result.ok) {
+      state.pushPermission = currentPermission();
+      const msgMap: Record<string, string> = {
+        'unsupported': 'Ez a böngésző nem támogatja az értesítéseket',
+        'permission-denied': 'Engedély megtagadva — a böngésző beállításaiban tudod feloldani',
+        'sw-register-failed': 'A service worker regisztrálása sikertelen',
+        'get-token-failed': 'Token-lekérés hiba — próbáld újra később',
+        'no-token': 'Nem kaptunk push tokent',
+      };
+      state.toast = { kind: 'error', msg: msgMap[result.error] ?? `Hiba: ${result.error}` };
+    } else {
+      // Refresh subscriptions
+      state.subscriptions = await getMySubscriptions(state.member.id);
+      state.prefs.enabled = true;
+      state.pushPermission = 'granted';
+      await savePrefs(state);
+      state.toast = { kind: 'success', msg: '🔔 Értesítések engedélyezve' };
+      void logEvent('info', 'Push subscribed', { memberId: state.member.id });
+    }
+  } catch (err) {
+    state.toast = { kind: 'error', msg: `Hiba: ${err instanceof Error ? err.message : String(err)}` };
+  } finally {
+    state.pushSubscribing = false;
+    rerender(container, state);
+  }
 }
-void _savePrefs; // suppress unused warning Phase A-ban
+
+async function handlePushUnsubscribe(container: HTMLElement, state: MeState) {
+  if (state.pushSubscribing) return;
+  state.pushSubscribing = true;
+  rerender(container, state);
+  try {
+    await unsubscribeFromPush(state.member.id);
+    state.subscriptions = [];
+    state.prefs.enabled = false;
+    await savePrefs(state);
+    state.toast = { kind: 'info', msg: 'Értesítések kikapcsolva' };
+    void logEvent('info', 'Push unsubscribed', { memberId: state.member.id });
+  } catch (err) {
+    state.toast = { kind: 'error', msg: `Hiba: ${err instanceof Error ? err.message : String(err)}` };
+  } finally {
+    state.pushSubscribing = false;
+    rerender(container, state);
+  }
+}
+
+/** Csendben menti a prefs-et a Firestore-ba (nincs toast, nincs re-render). */
+async function savePrefs(state: MeState): Promise<void> {
+  try {
+    await updateMemberPrefs(state.member.id, { notifications: state.prefs });
+  } catch (err) {
+    console.warn('[me] savePrefs failed:', err);
+  }
+}
 
 // Phase D-től használjuk — placeholder
 async function _deleteAttendance(name: string, date: string) {

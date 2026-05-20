@@ -76,6 +76,18 @@ service cloud.firestore {
       allow read, write: if isAdmin();
     }
 
+    // Push notification subscription-ök — saját rekord teljes hozzáférés,
+    // admin minden, mindenki más semmi.
+    match /push_subscriptions/{doc} {
+      allow read: if isAdmin()
+        || (request.auth != null && resource.data.memberEmail == request.auth.token.email);
+      allow create: if request.auth != null
+        && request.auth.token.email_verified == true
+        && request.resource.data.memberEmail == request.auth.token.email;
+      allow update, delete: if isAdmin()
+        || (request.auth != null && resource.data.memberEmail == request.auth.token.email);
+    }
+
     // Historical / legacy kollekciók (Streamlit verzió hagyatéka) — nyilvános olvasás
     match /historical_session_totals/{doc} {
       allow read: if true;

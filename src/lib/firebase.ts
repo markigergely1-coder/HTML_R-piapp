@@ -5,6 +5,7 @@ import {
   persistentMultipleTabManager,
 } from 'firebase/firestore';
 import { getAuth, GoogleAuthProvider } from 'firebase/auth';
+import { getMessaging, isSupported, type Messaging } from 'firebase/messaging';
 
 // Firebase config — public, biztonságos publikálni
 // (a tényleges biztonságot Firestore Security Rules adja)
@@ -35,3 +36,22 @@ export const db = initializeFirestore(app, {
 
 export const auth = getAuth(app);
 export const googleProvider = new GoogleAuthProvider();
+
+/**
+ * Firebase Cloud Messaging — lazy, csak akkor inicializál ha a böngésző támogatja.
+ * iOS Safari nem-PWA módban nem támogat web push-t → itt null-t kapunk és graceful
+ * degradációval kezeljük a UI-ban (notification toggle disabled marad).
+ *
+ * NOTE: az isSupported() Promise-t ad vissza, ezért top-level await kell. A Vite
+ * build-time-ban kezeli a module-szintű awaits-eket (ES2022 target).
+ */
+let _messaging: Messaging | null = null;
+try {
+  if (typeof window !== 'undefined' && (await isSupported())) {
+    _messaging = getMessaging(app);
+  }
+} catch {
+  _messaging = null;
+}
+export const messaging: Messaging | null = _messaging;
+export const VAPID_KEY = import.meta.env.VITE_FIREBASE_VAPID_KEY as string | undefined;
