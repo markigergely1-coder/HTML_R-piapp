@@ -22,7 +22,27 @@ import {
   updateDoc,
   serverTimestamp,
 } from 'firebase/firestore';
-import { db, messaging, VAPID_KEY } from './firebase';
+import { getFunctions, httpsCallable } from 'firebase/functions';
+import { db, messaging, VAPID_KEY, app } from './firebase';
+
+const FUNCTIONS_REGION = 'europe-west1';
+
+export interface TestPushResult {
+  sent: number;
+  failed: number;
+  devices: { device: string; ok: boolean; reason?: string }[];
+}
+
+/**
+ * Admin-only: teszt push küldése egy megadott member összes engedélyezett
+ * eszközére. Hívja a `sendTestPush` Cloud Function-t.
+ */
+export async function sendTestPush(memberId: string): Promise<TestPushResult> {
+  const functions = getFunctions(app, FUNCTIONS_REGION);
+  const fn = httpsCallable<{ memberId: string }, TestPushResult>(functions, 'sendTestPush');
+  const res = await fn({ memberId });
+  return res.data;
+}
 
 const PUSH_SUBS = 'push_subscriptions';
 

@@ -7,7 +7,8 @@
 
 import { renderHeader } from '../components/header';
 import { getAuthState, onAuthChange, signIn } from '../lib/auth';
-import { getAppLogs, pingFirestore, type AppLog } from '../lib/firestore';
+import { getAppLogs, pingFirestore, getAllMembers, getMemberByEmail, type AppLog, type Member } from '../lib/firestore';
+import { sendTestPush, type TestPushResult } from '../lib/notifications';
 
 interface DiagState {
   logs: AppLog[];
@@ -17,6 +18,11 @@ interface DiagState {
   emailTestRecipient: string;
   emailTesting: boolean;
   emailTestResult: { ok: boolean; msg: string } | null;
+  // Push teszt
+  members: Member[];
+  pushTargetMemberId: string;
+  pushTesting: boolean;
+  pushTestResult: TestPushResult | { error: string } | null;
 }
 
 // ─────────────────────────────────────────────────────────────────
@@ -32,10 +38,16 @@ export async function renderDiagnosticsPage(container: HTMLElement): Promise<voi
   if (!auth.isAdmin)     return showNoPermissionGate(container, auth.user.email ?? '');
 
   let logs: AppLog[] = [];
+  let members: Member[] = [];
+  let selfMember: Member | null = null;
   try {
-    logs = await getAppLogs(100);
+    [logs, members, selfMember] = await Promise.all([
+      getAppLogs(100),
+      getAllMembers(),
+      auth.user?.email ? getMemberByEmail(auth.user.email) : Promise.resolve(null),
+    ]);
   } catch (e) {
-    console.warn('[diagnostics] log lekérés hiba:', e);
+    console.warn('[diagnostics] lekérés hiba:', e);
   }
   const state: DiagState = {
     logs,
@@ -45,6 +57,10 @@ export async function renderDiagnosticsPage(container: HTMLElement): Promise<voi
     emailTestRecipient: getAuthState().user?.email ?? '',
     emailTesting: false,
     emailTestResult: null,
+    members: members.filter((m) => m.active !== false).sort((a, b) => a.name.localeCompare(b.name, 'hu')),
+    pushTargetMemberId: selfMember?.id ?? '',
+    pushTesting: false,
+    pushTestResult: null,
   };
   rerender(container, state);
 
@@ -125,6 +141,7 @@ function renderBody(state: DiagState): string {
       <aside class="lg:sticky lg:top-[110px] space-y-3 px-5 pt-5 lg:px-0 lg:pt-0">
         ${renderConnectionsCard(state)}
         ${renderAuthCard()}
+        ${renderPushTestCard(state)}
         ${renderEmailTestCard(state)}
       </aside>
 
@@ -183,6 +200,74 @@ function renderAuthCard(): string {
           <span class="font-semibold ${auth.isAdmin ? 'text-[color:#047857]' : 'text-[color:var(--fg-2)]'}">${auth.isAdmin ? '✓ Igen' : '✗ Nem'}</span>
         </li>
       </ul>
+    </div>`;
+}
+
+function renderPushTestCard(state: DiagState): string {
+  const opts = state.members.map((m) =>
+    `<option value="${eh(m.id)}" ${state.pushTargetMemberId === m.id ? 'selected' : ''}>${eh(m.name)}</option>`,
+  ).join('');
+
+  let resultBlock = '';
+  if (state.pushTestResult) {
+    if ('error' in state.pushTestResult) {
+      resultBlock = `
+        <div class="mt-3 px-3 py-2 rounded-xl text-[12px] font-semibold"
+             style="background:color-mix(in oklab,var(--danger) 14%,transparent);color:var(--danger-ink)">
+          ✗ ${eh(state.pushTestResult.error)}
+        </div>`;
+    } else {
+      const r = state.pushTestResult;
+      const overallOk = r.sent > 0 && r.failed === 0;
+      const lineColor = overallOk
+        ? 'background:color-mix(in oklab,#10b981 14%,transparent);color:#047857'
+        : r.sent > 0
+          ? 'background:color-mix(in oklab,#f59e0b 14%,transparent);color:#b45309'
+          : 'background:color-mix(in oklab,var(--danger) 14%,transparent);color:var(--danger-ink)';
+      const summary = r.devices.length === 0
+        ? 'Nincs regisztrált eszköze ennek a tagnak.'
+        : `Sikeres: ${r.sent} · Hiba: ${r.failed}`;
+      const deviceList = r.devices.length === 0 ? '' : `
+        <ul class="mt-2 space-y-1">
+          ${r.devices.map((d) => `
+            <li class="flex items-center justify-between text-[11px] font-mono-tnum">
+              <span class="text-fg-2 truncate">${d.ok ? '✓' : '✗'} ${eh(d.device)}</span>
+              ${d.reason ? `<span class="text-fg-3 ml-2">${eh(d.reason)}</span>` : ''}
+            </li>
+          `).join('')}
+        </ul>`;
+      resultBlock = `
+        <div class="mt-3 px-3 py-2 rounded-xl text-[12px] font-semibold" style="${lineColor}">
+          ${overallOk ? '✓' : r.sent > 0 ? '⚠' : '✗'} ${eh(summary)}
+        </div>
+        ${deviceList}`;
+    }
+  }
+
+  return `
+    <div class="card p-4 fade-up">
+      <div class="flex items-center gap-2 mb-3">
+        <span class="text-xl">🔔</span>
+        <div>
+          <p class="eyebrow text-[10px]">Push</p>
+          <p class="text-[15px] font-semibold text-fg-1">Teszt értesítés</p>
+        </div>
+      </div>
+      <p class="text-[12px] text-fg-3 mb-3">Küld egy teszt push-t a kiválasztott tag minden engedélyezett eszközére. A prefs-eket figyelmen kívül hagyja.</p>
+      <label class="block mb-2">
+        <span class="text-[10px] font-semibold text-fg-3 block mb-1">Címzett tag</span>
+        <select id="push-test-member" class="select-native w-full rounded-[12px] border px-3 py-2 text-[13px] font-medium text-fg-1 focus:outline-none"
+          style="border-color:var(--line-strong); background:var(--bg-card)">
+          ${opts || '<option value="">Nincs tag</option>'}
+        </select>
+      </label>
+      <button id="push-test-btn"
+        class="w-full px-4 py-2.5 rounded-full text-[13px] font-semibold transition-colors ${state.pushTesting ? 'opacity-60 cursor-not-allowed' : ''}"
+        style="background:var(--accent);color:white"
+        ${state.pushTesting || !state.pushTargetMemberId ? 'disabled' : ''}>
+        ${state.pushTesting ? 'Küldés…' : 'Push küldése'}
+      </button>
+      ${resultBlock}
     </div>`;
 }
 
@@ -317,6 +402,31 @@ function attachHandlers(container: HTMLElement, state: DiagState) {
 
   container.querySelector<HTMLInputElement>('#email-test-recipient')?.addEventListener('input', (e) => {
     state.emailTestRecipient = (e.target as HTMLInputElement).value;
+  });
+
+  // Push teszt: member dropdown change
+  container.querySelector<HTMLSelectElement>('#push-test-member')?.addEventListener('change', (e) => {
+    state.pushTargetMemberId = (e.target as HTMLSelectElement).value;
+    // Csak a result-blokkot mossuk le, dropdown értéke marad
+    state.pushTestResult = null;
+    rerender(container, state);
+  });
+  // Push teszt: küldés
+  container.querySelector<HTMLButtonElement>('#push-test-btn')?.addEventListener('click', async () => {
+    if (state.pushTesting || !state.pushTargetMemberId) return;
+    state.pushTesting = true;
+    state.pushTestResult = null;
+    rerender(container, state);
+    try {
+      const result = await sendTestPush(state.pushTargetMemberId);
+      state.pushTestResult = result;
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      state.pushTestResult = { error: msg };
+    } finally {
+      state.pushTesting = false;
+      rerender(container, state);
+    }
   });
 
   container.querySelector<HTMLButtonElement>('#email-test-btn')?.addEventListener('click', async () => {

@@ -28,6 +28,42 @@ admin.initializeApp();
 // Push notification function-ök re-exportja
 export { tuesdayReminder, onCancellation, onAttendanceFullTeam } from './notifications';
 
+// Diagnosztika oldalról hívható teszt push (admin-only).
+// A megadott member összes engedélyezett eszközére küld push-t, NEM ellenőrzi
+// a prefs-et (mert tesztelni akarjuk a működést). Visszatér eszköz-szintű
+// részletekkel: melyik eszköz fogadta, melyik bukott el, miért.
+import { sendRawPushToMember } from './notifications';
+
+interface TestPushResult {
+  sent: number;
+  failed: number;
+  devices: { device: string; ok: boolean; reason?: string }[];
+}
+
+export const sendTestPush = onCall(
+  { cors: true, timeoutSeconds: 30 },
+  async (req): Promise<TestPushResult> => {
+    const userEmail = req.auth?.token?.email?.toLowerCase() ?? '';
+    if (!userEmail) {
+      throw new HttpsError('unauthenticated', 'Bejelentkezés szükséges.');
+    }
+    if (!ADMIN_EMAILS.has(userEmail)) {
+      throw new HttpsError('permission-denied', 'Csak admin küldhet teszt push-t.');
+    }
+    const memberId = (req.data?.memberId as string | undefined)?.trim();
+    if (!memberId) {
+      throw new HttpsError('invalid-argument', 'memberId paraméter szükséges.');
+    }
+    const result = await sendRawPushToMember(memberId, {
+      title: '🧪 Teszt push',
+      body: `Diagnosztika — ${new Date().toLocaleString('hu-HU', { timeZone: 'Europe/Budapest' })}`,
+      tag: `test-${Date.now()}`,
+      url: '/#/diagnostics',
+    });
+    return result;
+  },
+);
+
 const GMAIL_USER = defineSecret('GMAIL_USER');
 const GMAIL_PASS = defineSecret('GMAIL_PASS');
 

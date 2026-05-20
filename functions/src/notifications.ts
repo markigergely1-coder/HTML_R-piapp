@@ -174,6 +174,78 @@ async function sendPushToMember(
   return { sent, failed };
 }
 
+/**
+ * "Nyers" push küldés egy member-nek: NEM ellenőrzi a prefs-et, csak küld
+ * az összes engedélyezett eszközre. Tesztelésre — pl. Diagnosztika oldalról.
+ * Visszatérés: { sent, failed, devices: string[] } eszköz-szintű részletekkel.
+ */
+export async function sendRawPushToMember(
+  memberId: string,
+  payload: PushPayload,
+): Promise<{ sent: number; failed: number; devices: { device: string; ok: boolean; reason?: string }[] }> {
+  const db = admin.firestore();
+  const subsSnap = await db
+    .collection('push_subscriptions')
+    .where('memberId', '==', memberId)
+    .where('enabled', '==', true)
+    .get();
+
+  if (subsSnap.empty) {
+    return { sent: 0, failed: 0, devices: [] };
+  }
+
+  let sent = 0;
+  let failed = 0;
+  const devices: { device: string; ok: boolean; reason?: string }[] = [];
+  const staleRefs: FirebaseFirestore.DocumentReference[] = [];
+
+  for (const subDoc of subsSnap.docs) {
+    const sub = subDoc.data();
+    const token = sub.token as string;
+    const device = (sub.device as string) || 'Ismeretlen eszköz';
+    if (!token) {
+      devices.push({ device, ok: false, reason: 'no-token' });
+      failed++;
+      continue;
+    }
+    try {
+      await admin.messaging().send({
+        token,
+        data: {
+          title: payload.title,
+          body: payload.body,
+          ...(payload.eventDate ? { eventDate: payload.eventDate } : {}),
+          ...(payload.tag ? { tag: payload.tag } : {}),
+          ...(payload.url ? { url: payload.url } : {}),
+        },
+        webpush: {
+          headers: { Urgency: 'high' },
+          fcmOptions: { link: payload.url ?? '/#/me' },
+        },
+      });
+      sent++;
+      devices.push({ device, ok: true });
+    } catch (err: unknown) {
+      failed++;
+      const code = (err as { code?: string })?.code ?? '';
+      devices.push({ device, ok: false, reason: code || 'error' });
+      if (
+        code === 'messaging/registration-token-not-registered' ||
+        code === 'messaging/invalid-registration-token' ||
+        code === 'messaging/invalid-argument'
+      ) {
+        staleRefs.push(subDoc.ref);
+      }
+    }
+  }
+
+  for (const ref of staleRefs) {
+    await ref.delete().catch(() => {});
+  }
+
+  return { sent, failed, devices };
+}
+
 /** Push küldés MINDEN aktív member-nek (a sendPushToMember a prefs alapján szűr). */
 async function broadcastToAllMembers(payload: PushPayload, eventKey: EventKey): Promise<void> {
   const db = admin.firestore();
