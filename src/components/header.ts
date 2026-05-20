@@ -28,7 +28,7 @@ interface TabDef {
   key: PageKey;
   label: string;
   href: string;
-  visibility: 'always' | 'admin' | 'transient';
+  visibility: 'always' | 'authed' | 'admin' | 'transient';
 }
 
 const TABS: TabDef[] = [
@@ -36,9 +36,11 @@ const TABS: TabDef[] = [
   { key: 'admin',       label: 'Regisztráció', href: '#/admin',       visibility: 'always' },
   { key: 'overview',    label: 'Alkalmak',    href: '#/',             visibility: 'always' },
 
+  // Bejelentkezett user-eknek (admin is): saját jelenlét + push beállítás
+  { key: 'me',          label: 'Jelenlét',    href: '#/me',          visibility: 'authed' },
+
   // Tranziens: csak akkor jelenik meg, ha az aktuális oldal ez
   { key: 'profile',     label: 'Profil',      href: '#/profile',     visibility: 'transient' },
-  { key: 'me',          label: 'Saját',       href: '#/me',          visibility: 'transient' },
 
   // Admin only (logged-in non-admin nem látja)
   { key: 'database',    label: 'Adatbázis',   href: '#/database',    visibility: 'admin' },
@@ -54,7 +56,7 @@ const TABS: TabDef[] = [
 const PAGE_LABEL: Record<PageKey, string> = {
   overview:    'Alkalmak',
   profile:     'Profil',
-  me:          'Saját',
+  me:          'Jelenlét',
   database:    'Adatbázis',
   yearly:      'Statisztikák',
   qr:          'Check-in',
@@ -68,11 +70,13 @@ const PAGE_LABEL: Record<PageKey, string> = {
 
 export function renderHeader(currentPage: PageKey): string {
   const auth = getAuthState();
+  const isLoggedIn = !!auth.user;
   const isAdmin = auth.isAdmin;
 
   const tabs = TABS.filter((t) => {
     if (t.visibility === 'always') return true;
     if (t.visibility === 'transient') return t.key === currentPage; // csak ha rajta vagyunk
+    if (t.visibility === 'authed') return isLoggedIn;
     if (t.visibility === 'admin') return isAdmin;
     return false;
   })
