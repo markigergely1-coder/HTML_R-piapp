@@ -26,44 +26,6 @@ import { getAuthState } from '../lib/auth';
 import { getInitials } from '../lib/avatar';
 import { renderHeader } from '../components/header';
 
-// ── 3D röplabda — lazy import (csak akkor tölt ha a böngésző támogatja) ──
-let vball3dDestroy: (() => void) | null = null;
-
-async function tryMount3DBall(container: HTMLElement): Promise<void> {
-  // Reduced motion preference tiszteletben tartása
-  if (window.matchMedia('(prefers-reduced-motion: reduce)').matches) return;
-  // WebGL support check
-  const testCanvas = document.createElement('canvas');
-  const gl = testCanvas.getContext('webgl2') ?? testCanvas.getContext('webgl');
-  if (!gl) return;
-
-  const canvas = container.querySelector<HTMLCanvasElement>('#vball-canvas');
-  if (!canvas) return;
-
-  try {
-    const isDark = document.documentElement.classList.contains('dark') ||
-      window.matchMedia('(prefers-color-scheme: dark)').matches;
-    const { mountVolleyball } = await import('../lib/volleyball3d');
-    const instance = mountVolleyball(canvas, isDark);
-    vball3dDestroy = instance.destroy;
-  } catch (err) {
-    console.warn('[volleyball3d] Mount failed, falling back to SVG:', err);
-    // Fallback: visszaállítja a régi SVG hátteret
-    const wrapper = canvas.parentElement;
-    if (wrapper) {
-      canvas.style.display = 'none';
-      wrapper.innerHTML += `<div class="absolute inset-0 overflow-hidden pointer-events-none" style="opacity:0.07"><svg viewBox="0 0 200 200" fill="none" stroke="currentColor" stroke-width="1.2" style="position:absolute;right:-20px;top:-20px;width:180px;height:180px;color:var(--fg-1)"><circle cx="100" cy="100" r="92"/><path d="M8 100 Q60 60 100 100 T192 100"/><path d="M100 8 Q60 60 100 100 T100 192"/><path d="M100 8 Q140 60 100 100 T100 192"/><path d="M8 100 Q60 140 100 100 T192 100"/><circle cx="100" cy="100" r="74" opacity="0.4"/></svg></div>`;
-    }
-  }
-}
-
-function cleanup3DBall(): void {
-  if (vball3dDestroy) {
-    vball3dDestroy();
-    vball3dDestroy = null;
-  }
-}
-
 interface OverviewState {
   dates: string[];
   upcoming: string;
@@ -99,22 +61,14 @@ export async function renderOverviewPage(container: HTMLElement): Promise<void> 
     deleting: false,
   };
 
-  // Előző 3D instance takarítása (ha oldalváltásból jövünk vissza)
-  cleanup3DBall();
-
   // First paint — instant, üres adattal
   container.innerHTML = renderShell(state);
   attachHandlers(container, state);
-
-  // 3D labda mountolása — első paint után, async (nem blokkolja az UI-t)
-  void tryMount3DBall(container);
 
   // Frissítő segédfüggvény: csak az érintett DOM-szakaszokat cseréli újra
   const refreshDataSections = () => {
     const hero = container.querySelector<HTMLElement>('#hero-wrapper');
     if (hero) hero.innerHTML = renderHero(state);
-    // A hero csere után újra mountoljuk a labdát (canvas új DOM-elem lett)
-    void tryMount3DBall(container);
     const result = container.querySelector<HTMLElement>('#result-main');
     if (result) result.innerHTML = renderResult(state);
     const rail = container.querySelector<HTMLElement>('#date-rail');
@@ -583,18 +537,19 @@ function renderSelfRegButton(state: OverviewState): string {
     </button>`;
 }
 
-// ─── 3D volleyball canvas ───
-// A canvas-t a hero kártya jobb felső sarkába tesszük — abszoút pozícionálva,
-// ugyanott ahol a régi SVG volt. A Three.js renderer alpha:true-val fut,
-// így az átlátszó háttér miatt a kártya háttere áttűnik alatta.
+// ─── Volleyball art SVG ───
 function renderVolleyballArt(): string {
   return `
-    <div class="absolute overflow-hidden pointer-events-none"
-         style="top:-10px;right:-10px;width:160px;height:160px;opacity:0.92">
-      <canvas id="vball-canvas"
-              width="160" height="160"
-              style="width:160px;height:160px;display:block"
-              aria-hidden="true"></canvas>
+    <div class="absolute inset-0 overflow-hidden pointer-events-none" style="opacity:0.07">
+      <svg viewBox="0 0 200 200" fill="none" stroke="currentColor" stroke-width="1.2"
+           style="position:absolute;right:-20px;top:-20px;width:180px;height:180px;color:var(--fg-1)">
+        <circle cx="100" cy="100" r="92"/>
+        <path d="M8 100 Q60 60 100 100 T192 100"/>
+        <path d="M100 8 Q60 60 100 100 T100 192"/>
+        <path d="M100 8 Q140 60 100 100 T100 192"/>
+        <path d="M8 100 Q60 140 100 100 T192 100"/>
+        <circle cx="100" cy="100" r="74" opacity="0.4"/>
+      </svg>
     </div>`;
 }
 
