@@ -5,6 +5,8 @@
  * - FCM token lekérése (VAPID key-jel)
  * - Subscription mentése Firestore-ba (`push_subscriptions` collection)
  * - Subscription lekérdezés + törlés
+ * - Token frissítés minden app-indításkor (megbízhatóság)
+ * - Subscription health-check: ha permission granted de nincs aktív sub → auto-resubscribe
  *
  * iOS Safari nem-PWA módban a `messaging` null lesz — minden helper graceful
  * `{ ok: false, error: 'unsupported' }`-tel tér vissza.
@@ -226,6 +228,192 @@ export async function setSubscriptionEnabled(subId: string, enabled: boolean): P
 /** Egy subscription törlése (eszköz eltávolítása listából). */
 export async function deleteSubscription(subId: string): Promise<void> {
   await deleteDoc(doc(db, PUSH_SUBS, subId));
+}
+
+// ─────────────────────────────────────────────────────────────────
+// Token frissítés & health-check (megbízhatóság)
+// ─────────────────────────────────────────────────────────────────
+
+/**
+ * App-indításkor hívandó: frissíti az FCM tokent és szinkronizálja a
+ * Firestore-ral. Ha a token megváltozott (FCM rotálta, böngésző újragenerálta),
+ * automatikusan frissíti a `push_subscriptions` dokumentumot.
+ *
+ * Ha a permission granted de nincs aktív subscription (pl. a user törölte a
+ * böngésző adatait, vagy a token stale-lé vált és a Cloud Function kitörölte),
+ * automatikusan újra-feliratkoztatja.
+ *
+ * Ezt minden app-indításkor meg kell hívni a bejelentkezett user-re.
+ */
+export async function refreshPushToken(
+  memberId: string,
+  memberEmail: string,
+): Promise<{ action: 'none' | 'updated' | 'resubscribed' | 'skipped'; reason?: string }> {
+  // Alap feltételek
+  if (!(await isPushSupported())) return { action: 'skipped', reason: 'unsupported' };
+  if (currentPermission() !== 'granted') return { action: 'skipped', reason: 'no-permission' };
+
+  // SW registration
+  let swReg: ServiceWorkerRegistration;
+  try {
+    const existing = await navigator.serviceWorker.getRegistration('/firebase-cloud-messaging-push-scope');
+    if (existing) {
+      swReg = existing;
+    } else {
+      swReg = await navigator.serviceWorker.register('/firebase-messaging-sw.js', {
+        scope: '/firebase-cloud-messaging-push-scope',
+      });
+    }
+    // Megvárjuk az aktiválódást
+    if (swReg.installing || swReg.waiting) {
+      await new Promise<void>((resolve) => {
+        const sw = swReg.installing ?? swReg.waiting;
+        if (!sw || sw.state === 'activated') { resolve(); return; }
+        sw.addEventListener('statechange', () => {
+          if (sw.state === 'activated') resolve();
+        });
+      });
+    }
+  } catch (err) {
+    console.warn('[notifications] refreshPushToken: SW reg failed:', err);
+    return { action: 'skipped', reason: 'sw-error' };
+  }
+
+  // Aktuális FCM token lekérése
+  let currentToken: string;
+  try {
+    currentToken = await getToken(messaging!, {
+      vapidKey: VAPID_KEY,
+      serviceWorkerRegistration: swReg,
+    });
+  } catch (err) {
+    console.warn('[notifications] refreshPushToken: getToken failed:', err);
+    return { action: 'skipped', reason: 'token-error' };
+  }
+  if (!currentToken) return { action: 'skipped', reason: 'empty-token' };
+
+  // Firestore-ban tárolt subscription-ek lekérdezése
+  const existingSubs = await getDocs(query(
+    collection(db, PUSH_SUBS),
+    where('memberId', '==', memberId),
+    where('enabled', '==', true),
+  ));
+
+  // Eset A: nincs egyetlen aktív subscription sem → újra-feliratkozás
+  if (existingSubs.empty) {
+    console.log('[notifications] refreshPushToken: no active subs found, resubscribing…');
+    const device = parseDeviceLabel(navigator.userAgent);
+    await addDoc(collection(db, PUSH_SUBS), {
+      memberId,
+      memberEmail,
+      token: currentToken,
+      device,
+      enabled: true,
+      createdAt: serverTimestamp(),
+    });
+    setupForegroundListener();
+    return { action: 'resubscribed' };
+  }
+
+  // Eset B: van subscription — nézzük meg egyezik-e a token
+  // Az aktuális eszköz label-je alapján keressük a matching doc-ot
+  const device = parseDeviceLabel(navigator.userAgent);
+  let matchedDoc: typeof existingSubs.docs[0] | null = null;
+
+  // Először token alapján keresünk (ha van ilyen → nincs frissítés szükséges)
+  for (const d of existingSubs.docs) {
+    if (d.data().token === currentToken) {
+      matchedDoc = d;
+      break;
+    }
+  }
+
+  if (matchedDoc) {
+    // Token egyezik, de lehet hogy a device label változott (pl. browser update)
+    const storedDevice = matchedDoc.data().device ?? '';
+    if (storedDevice !== device) {
+      await updateDoc(matchedDoc.ref, { device });
+    }
+    setupForegroundListener();
+    return { action: 'none' };
+  }
+
+  // Token nem egyezik egyikkel sem → keressük device alapján az aktuálisat
+  let deviceDoc: typeof existingSubs.docs[0] | null = null;
+  for (const d of existingSubs.docs) {
+    if (d.data().device === device) {
+      deviceDoc = d;
+      break;
+    }
+  }
+
+  if (deviceDoc) {
+    // Ugyanaz az eszköz, de más a token → FCM rotálta → frissítjük
+    console.log('[notifications] refreshPushToken: token rotated, updating…');
+    await updateDoc(deviceDoc.ref, {
+      token: currentToken,
+      device,
+    });
+    setupForegroundListener();
+    return { action: 'updated' };
+  }
+
+  // Teljesen új eszköz / token kombináció → új doc
+  console.log('[notifications] refreshPushToken: new device detected, adding…');
+  await addDoc(collection(db, PUSH_SUBS), {
+    memberId,
+    memberEmail,
+    token: currentToken,
+    device,
+    enabled: true,
+    createdAt: serverTimestamp(),
+  });
+  setupForegroundListener();
+  return { action: 'resubscribed' };
+}
+
+/**
+ * Automatikus push token keepalive: auth állapot változásra figyel,
+ * és bejelentkezett user esetén minden app-indításkor frissíti a tokent.
+ *
+ * Ezt a main.ts-ben kell egyszer meghívni.
+ */
+export function setupPushTokenKeepAlive(): void {
+  // Késleltetett import az auth modulból (ciklikus import elkerülése)
+  import('./auth').then(({ onAuthChange }) => {
+    let lastRefreshedUid = '';
+    onAuthChange(async (state) => {
+      if (state.loading || !state.user) {
+        lastRefreshedUid = '';
+        return;
+      }
+      // Ugyanazt a user-t ne frissítsük többször egy session-ben
+      if (lastRefreshedUid === state.user.uid) return;
+      lastRefreshedUid = state.user.uid;
+
+      // Kis késleltetés: ne lassítsa az első renderelést
+      await new Promise((r) => setTimeout(r, 2000));
+
+      try {
+        // Member adatok kellenek a push token frissítéshez
+        const { getMemberByEmail } = await import('./firestore');
+        const email = state.user!.email ?? '';
+        if (!email) return;
+        const member = await getMemberByEmail(email);
+        if (!member) return;
+
+        const result = await refreshPushToken(member.id, email);
+        if (result.action !== 'none' && result.action !== 'skipped') {
+          console.log(`[notifications] pushTokenKeepAlive: ${result.action}`);
+        }
+      } catch (err) {
+        // Graceful — token refresh hiba nem szabad hogy az appot elrontsa
+        console.warn('[notifications] pushTokenKeepAlive error:', err);
+      }
+    });
+  }).catch((err) => {
+    console.warn('[notifications] setupPushTokenKeepAlive: dynamic import failed:', err);
+  });
 }
 
 // ─────────────────────────────────────────────────────────────────
