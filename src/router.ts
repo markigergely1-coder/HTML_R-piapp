@@ -1,7 +1,8 @@
 /**
  * Minimális hash-alapú router.
  * Útvonalak:
- *   #/         → overview
+ *   #/         → overview (admin / Csenge / nem bejelentkezett)
+ *              → átirányít #/me-re (minden más bejelentkezett user)
  *   #/profile  → profile
  *   #/qr       → qr
  *   #/members  → members (admin)
@@ -14,8 +15,18 @@ import { renderOverviewPage } from './pages/overview';
 import { renderProfilePage } from './pages/profile';
 import { renderDatabasePage } from './pages/database';
 import { renderQrPage } from './pages/qr';
-import { onAuthChange, signIn, signOut } from './lib/auth';
+import { onAuthChange, getAuthState, signIn, signOut } from './lib/auth';
 import { toggleTheme } from './lib/theme';
+
+/**
+ * Azok az email-ek, akiknek a #/ (overview) marad az alapértelmezett oldal
+ * bejelentkezés után is — nem irányítódnak át a #/me-re.
+ * Admin-ok automatikusan ide tartoznak (ADMIN_EMAILS), ez a lista a
+ * NEM-admin kivételekre való.
+ */
+const OVERVIEW_KEEP_EMAILS = new Set([
+  'domokos.csenge2000@gmail.com',
+]);
 
 type Route = {
   pattern: RegExp;
@@ -48,6 +59,22 @@ function currentHash(): string {
 
 async function dispatch(container: HTMLElement) {
   const hash = currentHash();
+
+  // Átirányítás: bejelentkezett normál user #/-ról → #/me
+  // Admin és Csenge marad az overview-n, nem bejelentkezett is.
+  if (/^#?\/?$/.test(hash)) {
+    const auth = getAuthState();
+    if (
+      !auth.loading &&
+      auth.user &&
+      !auth.isAdmin &&
+      !OVERVIEW_KEEP_EMAILS.has(auth.user.email?.toLowerCase() ?? '')
+    ) {
+      window.location.hash = '#/me';
+      return; // a hashchange event újra meghívja a dispatch-et
+    }
+  }
+
   const route = ROUTES.find((r) => r.pattern.test(hash));
   try {
     if (route) {

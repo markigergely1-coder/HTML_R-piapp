@@ -32,12 +32,12 @@ interface TabDef {
 }
 
 const TABS: TabDef[] = [
-  // Mindenkinek (bejelentkezés nélkül is)
-  { key: 'admin',       label: 'Regisztráció', href: '#/admin',       visibility: 'always' },
-  { key: 'overview',    label: 'Alkalmak',    href: '#/',             visibility: 'always' },
-
-  // Bejelentkezett user-eknek (admin is): saját jelenlét + push beállítás
+  // Bejelentkezett user-eknek (admin is): saját jelenlét + push beállítás — az első tab
   { key: 'me',          label: 'Jelenlét',    href: '#/me',          visibility: 'authed' },
+
+  // Mindenkinek (bejelentkezés nélkül is)
+  { key: 'overview',    label: 'Alkalmak',    href: '#/',            visibility: 'always' },
+  { key: 'admin',       label: 'Regisztráció', href: '#/admin',       visibility: 'always' },
 
   // Tranziens: csak akkor jelenik meg, ha az aktuális oldal ez
   { key: 'profile',     label: 'Profil',      href: '#/profile',     visibility: 'transient' },
