@@ -57,12 +57,18 @@ function currentHash(): string {
   return qIdx >= 0 ? raw.slice(0, qIdx) : raw;
 }
 
+// Flag: az első betöltéskori átirányítás már megtörtént-e.
+// Ez biztosítja, hogy a user szabadon navigálhasson az Alkalmak (#/) oldalra
+// miután az app egyszer átirányította #/me-re.
+let initialRedirectDone = false;
+
 async function dispatch(container: HTMLElement) {
   const hash = currentHash();
 
   // Átirányítás: bejelentkezett normál user #/-ról → #/me
+  // CSAK az első app-indításkor — utána szabadon navigálhat.
   // Admin és Csenge marad az overview-n, nem bejelentkezett is.
-  if (/^#?\/?$/.test(hash)) {
+  if (!initialRedirectDone && /^#?\/?$/.test(hash)) {
     const auth = getAuthState();
     if (
       !auth.loading &&
@@ -70,6 +76,7 @@ async function dispatch(container: HTMLElement) {
       !auth.isAdmin &&
       !OVERVIEW_KEEP_EMAILS.has(auth.user.email?.toLowerCase() ?? '')
     ) {
+      initialRedirectDone = true;
       window.location.hash = '#/me';
       return; // a hashchange event újra meghívja a dispatch-et
     }
