@@ -5,6 +5,7 @@ import { setupPwa } from './lib/pwa';
 import { applyTheme, watchSystemTheme } from './lib/theme';
 import { setupAutoPushPrompt } from './lib/pushPrompt';
 import { setupPushTokenKeepAlive } from './lib/notifications';
+import { setupInstallPrompt } from './lib/installPrompt';
 
 // Téma alkalmazása MIELŐTT bármi renderelődne (villanás-mentes initial paint)
 applyTheme();
@@ -26,3 +27,6 @@ maybeShowInAppBanner();
 
 // PWA: service worker + auto-update prompt
 setupPwa();
+
+// PWA: „App telepítése" banner — natív prompt Androidon, iOS útmutató iPhone-on
+setupInstallPrompt();

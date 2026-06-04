@@ -53,6 +53,7 @@ import { logEvent } from '../lib/logger';
 interface MeState {
   member: Member;
   myAttendance: Set<string>;        // datok ahol már Yes vagyok
+  myDeclined: Set<string>;          // datok ahol explicit No-t jeleztem
   nextDate: string;                 // a következő jövőbeli kedd
   pastDate: string | null;          // a legutóbbi lezárult kedd (kedd 21:00 után), különben null
   guestMode: boolean;               // a következő alkalomhoz nyit a vendég-form
@@ -104,9 +105,10 @@ export async function renderMePage(container: HTMLElement): Promise<void> {
     return;
   }
 
-  // Saját attendance — hogy lássuk hol van már Yes
+  // Saját attendance — hogy lássuk hol van már Yes vagy No
   const records = await getAttendanceForPlayer(member.name);
   const myAttendance = new Set(records.filter((r) => r.status === 'Yes' && r.event_date).map((r) => r.event_date));
+  const myDeclined = new Set(records.filter((r) => r.status === 'No' && r.event_date).map((r) => r.event_date));
 
   // Jövőbeli kedd: a következő hét keddje (vagy ma ha kedd 21:00 előtt)
   const futureCandidates = generateTuesdayDates(0, 2);
@@ -134,6 +136,7 @@ export async function renderMePage(container: HTMLElement): Promise<void> {
   const state: MeState = {
     member,
     myAttendance,
+    myDeclined,
     nextDate,
     pastDate,
     guestMode: false,
@@ -256,12 +259,20 @@ function renderHero(state: MeState): string {
 // ─── Következő alkalom ───
 function renderNextEventCard(state: MeState): string {
   const isGoing = state.myAttendance.has(state.nextDate);
+  const isDeclined = state.myDeclined.has(state.nextDate);
   const dateLong = formatDateHuLong(state.nextDate);
   const day = dayOf(state.nextDate);
   const month = formatMonthShortHu(state.nextDate);
 
   // Vendég-form (ha nyitva van)
   const guestForm = state.guestMode ? renderGuestForm(state, 'future') : '';
+
+  // Státusz szöveg
+  const statusText = isGoing
+    ? '✓ Már jelentkeztél'
+    : isDeclined
+      ? '✗ Jelezted, hogy nem tudsz jönni'
+      : 'Még nem jelentkeztél';
 
   return `
     <section class="fade-up" style="animation-delay:80ms">
@@ -277,23 +288,28 @@ function renderNextEventCard(state: MeState): string {
           </div>
           <div class="min-w-0 flex-1">
             <p class="text-[14px] font-semibold text-fg-1 capitalize">${eh(dateLong.split(',')[1]?.trim() ?? '')}</p>
-            <p class="text-[11px] text-fg-3 mt-0.5">${isGoing ? '✓ Már jelentkeztél' : 'Még nem jelentkeztél'}</p>
+            <p class="text-[11px] mt-0.5" style="color:${isDeclined ? 'var(--danger-ink)' : 'var(--fg-3)'}">${statusText}</p>
           </div>
         </div>
 
-        <div class="flex flex-col gap-2">
-          ${isGoing
-            ? `<button id="me-cancel-next" type="button" ${state.saving ? 'disabled' : ''}
-                class="w-full px-4 py-3 rounded-full text-[14px] font-semibold transition-colors ${state.saving ? 'opacity-60 cursor-not-allowed' : ''}"
-                style="background:color-mix(in oklab,var(--danger) 12%,transparent);color:var(--danger-ink);border:1.5px solid color-mix(in oklab,var(--danger) 30%,transparent)">
-                ${state.saving ? 'Mentés…' : '✗ Lemondom'}
-              </button>`
-            : `<button id="me-register-next" type="button" ${state.saving ? 'disabled' : ''}
-                class="w-full px-4 py-3 rounded-full text-white text-[14px] font-semibold transition-colors ${state.saving ? 'opacity-60 cursor-not-allowed' : ''}"
-                style="background:var(--accent)">
-                ${state.saving ? 'Mentés…' : '✓ Jövök'}
-              </button>`
-          }
+        <div class="grid grid-cols-2 gap-2">
+          <button id="me-register-next" type="button" ${state.saving ? 'disabled' : ''}
+            class="px-4 py-3 rounded-full text-[14px] font-semibold transition-colors ${state.saving ? 'opacity-60 cursor-not-allowed' : ''}"
+            style="${isGoing
+              ? 'background:#047857;color:white;border:1.5px solid #047857'
+              : 'background:color-mix(in oklab,#10b981 12%,transparent);color:#047857;border:1.5px solid color-mix(in oklab,#10b981 30%,transparent)'}">
+            ${state.saving ? '…' : '✓ Jövök'}
+          </button>
+          <button id="me-cancel-next" type="button" ${state.saving ? 'disabled' : ''}
+            class="px-4 py-3 rounded-full text-[14px] font-semibold transition-colors ${state.saving ? 'opacity-60 cursor-not-allowed' : ''}"
+            style="${isDeclined
+              ? 'background:var(--danger);color:white;border:1.5px solid var(--danger)'
+              : 'background:color-mix(in oklab,var(--danger) 12%,transparent);color:var(--danger-ink);border:1.5px solid color-mix(in oklab,var(--danger) 30%,transparent)'}">
+            ${state.saving ? '…' : '✗ Nem tudok'}
+          </button>
+        </div>
+
+        <div class="mt-2">
           <button id="me-toggle-guest" type="button" ${state.saving ? 'disabled' : ''}
             class="w-full px-4 py-2.5 rounded-full text-[13px] font-semibold transition-colors"
             style="background:var(--bg-elev);color:var(--fg-1);border:1px solid var(--line-strong)">
@@ -310,11 +326,18 @@ function renderNextEventCard(state: MeState): string {
 function renderPastEventCard(state: MeState): string {
   if (!state.pastDate) return '';
   const wasThere = state.myAttendance.has(state.pastDate);
+  const wasDeclined = state.myDeclined.has(state.pastDate);
   const dateLong = formatDateHuLong(state.pastDate);
   const day = dayOf(state.pastDate);
   const month = formatMonthShortHu(state.pastDate);
 
   const guestForm = state.pastGuestMode ? renderGuestForm(state, 'past') : '';
+
+  const statusText = wasThere
+    ? '✓ Voltál ott'
+    : wasDeclined
+      ? '✗ Jelezted, hogy nem voltál ott'
+      : 'Még nem jelezted, ott voltál-e';
 
   return `
     <section class="fade-up" style="animation-delay:120ms">
@@ -330,23 +353,34 @@ function renderPastEventCard(state: MeState): string {
           </div>
           <div class="min-w-0 flex-1">
             <p class="text-[14px] font-semibold text-fg-1 capitalize">${eh(dateLong.split(',')[1]?.trim() ?? '')}</p>
-            <p class="text-[11px] text-fg-3 mt-0.5">${wasThere ? '✓ Voltál ott' : 'Még nem jelezted, ott voltál-e'}</p>
+            <p class="text-[11px] mt-0.5" style="color:${wasDeclined ? 'var(--danger-ink)' : 'var(--fg-3)'}">${statusText}</p>
           </div>
         </div>
 
-        ${wasThere
-          ? `<p class="text-[12px] text-fg-3 text-center">Köszi a regisztrációt! 🏐</p>`
-          : `<button id="me-register-past" type="button" ${state.saving ? 'disabled' : ''}
-              class="w-full px-4 py-3 rounded-full text-white text-[14px] font-semibold transition-colors mb-2"
-              style="background:var(--accent)">
-              ${state.saving ? 'Mentés…' : '✓ Igen, ott voltam'}
-            </button>`
-        }
-        <button id="me-toggle-past-guest" type="button" ${state.saving ? 'disabled' : ''}
-          class="w-full px-4 py-2.5 rounded-full text-[13px] font-semibold transition-colors"
-          style="background:var(--bg-elev);color:var(--fg-1);border:1px solid var(--line-strong)">
-          ${state.pastGuestMode ? '× Vendéget mégse adok hozzá' : '🙋 Vendéget hoztam'}
-        </button>
+        <div class="grid grid-cols-2 gap-2">
+          <button id="me-register-past" type="button" ${state.saving ? 'disabled' : ''}
+            class="px-4 py-3 rounded-full text-[14px] font-semibold transition-colors ${state.saving ? 'opacity-60 cursor-not-allowed' : ''}"
+            style="${wasThere
+              ? 'background:#047857;color:white;border:1.5px solid #047857'
+              : 'background:color-mix(in oklab,#10b981 12%,transparent);color:#047857;border:1.5px solid color-mix(in oklab,#10b981 30%,transparent)'}">
+            ${state.saving ? '…' : '✓ Ott voltam'}
+          </button>
+          <button id="me-decline-past" type="button" ${state.saving ? 'disabled' : ''}
+            class="px-4 py-3 rounded-full text-[14px] font-semibold transition-colors ${state.saving ? 'opacity-60 cursor-not-allowed' : ''}"
+            style="${wasDeclined
+              ? 'background:var(--danger);color:white;border:1.5px solid var(--danger)'
+              : 'background:color-mix(in oklab,var(--danger) 12%,transparent);color:var(--danger-ink);border:1.5px solid color-mix(in oklab,var(--danger) 30%,transparent)'}">
+            ${state.saving ? '…' : '✗ Nem voltam'}
+          </button>
+        </div>
+
+        <div class="mt-2">
+          <button id="me-toggle-past-guest" type="button" ${state.saving ? 'disabled' : ''}
+            class="w-full px-4 py-2.5 rounded-full text-[13px] font-semibold transition-colors"
+            style="background:var(--bg-elev);color:var(--fg-1);border:1px solid var(--line-strong)">
+            ${state.pastGuestMode ? '× Vendéget mégse adok hozzá' : '🙋 Vendéget hoztam'}
+          </button>
+        </div>
 
         ${guestForm}
       </div>
@@ -801,9 +835,14 @@ async function handleRegisterNext(container: HTMLElement, state: MeState, status
   rerender(container, state);
   try {
     await upsertSelfRegistration(state.member.name, state.nextDate, status);
-    if (status === 'Yes') state.myAttendance.add(state.nextDate);
-    else state.myAttendance.delete(state.nextDate);
-    state.toast = { kind: 'success', msg: status === 'Yes' ? '✓ Sikeresen jelentkeztél!' : '✗ Lemondtad' };
+    if (status === 'Yes') {
+      state.myAttendance.add(state.nextDate);
+      state.myDeclined.delete(state.nextDate);
+    } else {
+      state.myAttendance.delete(state.nextDate);
+      state.myDeclined.add(state.nextDate);
+    }
+    state.toast = { kind: 'success', msg: status === 'Yes' ? '✓ Sikeresen jelentkeztél!' : '✗ Jelezted, hogy nem tudsz jönni' };
     void logEvent('info', 'Self registration', { name: state.member.name, date: state.nextDate, status });
   } catch (err) {
     state.toast = { kind: 'error', msg: `Hiba: ${err instanceof Error ? err.message : String(err)}` };
@@ -813,15 +852,21 @@ async function handleRegisterNext(container: HTMLElement, state: MeState, status
   }
 }
 
-async function handleRegisterPast(container: HTMLElement, state: MeState) {
+async function handleRegisterPast(container: HTMLElement, state: MeState, status: 'Yes' | 'No' = 'Yes') {
   if (state.saving || !state.pastDate) return;
   state.saving = true;
   rerender(container, state);
   try {
-    await upsertSelfRegistration(state.member.name, state.pastDate, 'Yes');
-    state.myAttendance.add(state.pastDate);
-    state.toast = { kind: 'success', msg: '✓ Hozzáadva' };
-    void logEvent('info', 'Self registration (past)', { name: state.member.name, date: state.pastDate });
+    await upsertSelfRegistration(state.member.name, state.pastDate, status);
+    if (status === 'Yes') {
+      state.myAttendance.add(state.pastDate);
+      state.myDeclined.delete(state.pastDate);
+    } else {
+      state.myAttendance.delete(state.pastDate);
+      state.myDeclined.add(state.pastDate);
+    }
+    state.toast = { kind: 'success', msg: status === 'Yes' ? '✓ Hozzáadva' : '✗ Jelezted, hogy nem voltál ott' };
+    void logEvent('info', `Self registration (past, ${status})`, { name: state.member.name, date: state.pastDate });
   } catch (err) {
     state.toast = { kind: 'error', msg: `Hiba: ${err instanceof Error ? err.message : String(err)}` };
   } finally {
