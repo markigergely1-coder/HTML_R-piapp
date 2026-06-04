@@ -679,9 +679,12 @@ function attachHandlers(container: HTMLElement, state: MeState) {
     void handleGuestSave(container, state, 'future');
   });
 
-  // Múltbeli: Voltam ott
+  // Múltbeli: Voltam ott / Nem voltam ott
   container.querySelector<HTMLButtonElement>('#me-register-past')?.addEventListener('click', () => {
-    void handleRegisterPast(container, state);
+    void handleRegisterPast(container, state, 'Yes');
+  });
+  container.querySelector<HTMLButtonElement>('#me-decline-past')?.addEventListener('click', () => {
+    void handleRegisterPast(container, state, 'No');
   });
   container.querySelector<HTMLButtonElement>('#me-toggle-past-guest')?.addEventListener('click', () => {
     state.pastGuestMode = !state.pastGuestMode;
