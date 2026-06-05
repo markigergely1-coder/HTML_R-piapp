@@ -545,14 +545,22 @@ function renderVolleyballArt(): string {
 
 // ─── Event handling ───
 
+/** Modul-szintű AbortController — biztosítja, hogy csak EGY aktív handler legyen. */
+let overviewAC: AbortController | null = null;
+
 /**
- * Egyszer hívandó — event delegation a container-en.
- * Soha nem halmozódnak fel duplikált listenerek, mert a container egy stabil
- * DOM elem, és a delegált click/touch egyetlen handler-en keresztül fut.
+ * Egyszer hívandó oldalrenderelésenként — event delegation a container-en.
+ * Ha korábban már volt csatolva handler (pl. tab-váltás utáni újrarender),
+ * az AbortController.abort() automatikusan eltávolítja a régit.
  */
 function attachDelegatedHandlers(container: HTMLElement, state: OverviewState) {
-  // ── Tooltip (egyszer) ──
-  attachTooltip(container);
+  // ── Korábbi listenerek tisztítása ──
+  if (overviewAC) overviewAC.abort();
+  overviewAC = new AbortController();
+  const { signal } = overviewAC;
+
+  // ── Tooltip ──
+  attachTooltip(container, signal);
 
   // ── Segédfüggvény: UI frissítés dátum-váltás vagy adat-változás után ──
   const refreshUI = (scrollSmooth = false) => {
@@ -679,7 +687,7 @@ function attachDelegatedHandlers(container: HTMLElement, state: OverviewState) {
       refreshUI(false);
       return;
     }
-  });
+  }, { signal });
 }
 
 /** Scroll-pozíció frissítése — biztonságos, ha a scroller nem létezik. */
@@ -808,7 +816,7 @@ function hideTooltip() {
   if (tooltipEl) tooltipEl.style.opacity = '0';
 }
 
-function attachTooltip(container: HTMLElement) {
+function attachTooltip(container: HTMLElement, signal: AbortSignal) {
   container.addEventListener('mouseover', (e) => {
     const target = (e.target as HTMLElement).closest<HTMLElement>('[data-tooltip]');
     if (!target) return;
@@ -816,15 +824,15 @@ function attachTooltip(container: HTMLElement) {
     if (!text) return;
     hideTooltip();
     tooltipShowTimer = window.setTimeout(() => showTooltip(target, text), TOOLTIP_DELAY_MS);
-  });
+  }, { signal });
   container.addEventListener('mouseout', (e) => {
     const target = (e.target as HTMLElement).closest<HTMLElement>('[data-tooltip]');
     if (!target) return;
     const related = (e as MouseEvent).relatedTarget as HTMLElement | null;
     if (related && target.contains(related)) return;
     hideTooltip();
-  });
+  }, { signal });
   // Mobil érintésnél ne ragadjon — scroll/click idején eltüntetjük
-  container.addEventListener('scroll', hideTooltip, true);
-  window.addEventListener('blur', hideTooltip);
+  container.addEventListener('scroll', hideTooltip, { capture: true, signal });
+  window.addEventListener('blur', hideTooltip, { signal });
 }
