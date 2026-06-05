@@ -63,35 +63,25 @@ export async function renderOverviewPage(container: HTMLElement): Promise<void> 
 
   // First paint — instant, üres adattal
   container.innerHTML = renderShell(state);
-  attachHandlers(container, state);
 
-  // Frissítő segédfüggvény: csak az érintett DOM-szakaszokat cseréli újra
-  const refreshDataSections = () => {
-    const hero = container.querySelector<HTMLElement>('#hero-wrapper');
-    if (hero) hero.innerHTML = renderHero(state);
-    const result = container.querySelector<HTMLElement>('#result-main');
-    if (result) result.innerHTML = renderResult(state);
-    const rail = container.querySelector<HTMLElement>('#date-rail');
-    if (rail) rail.innerHTML = renderDateRailItems(state);
-    const scroller = container.querySelector<HTMLElement>('#date-scroller');
-    if (scroller) scroller.innerHTML = state.dates.map((d) => renderDateChip(d, state)).join('');
-    attachHandlers(container, state);
-  };
+  // Event delegation — EGYSZER csatolódik, soha nem duplikálódik
+  attachDelegatedHandlers(container, state);
+  scrollDateChipIntoView(container, state, false);
 
   // 1) Cancelled sessions — kis kollekció, gyorsan jön
   getCancelledSessions()
-    .then((c) => { state.cancelled = c; refreshDataSections(); })
+    .then((c) => { state.cancelled = c; refreshDataUI(container, state); })
     .catch(() => { /* maradjon üres */ });
 
   // 2) Attendees by dates — fő tartalom (létszámok + résztvevő grid)
   getAttendeesByDates(dates)
-    .then((a) => { state.attendeesByDate = a; refreshDataSections(); })
+    .then((a) => { state.attendeesByDate = a; refreshDataUI(container, state); })
     .catch(() => { /* maradjon üres */ });
 
   // 3) Self member — csak bejelentkezett user-eknek
   if (authState.user?.email) {
     getMemberByEmail(authState.user.email)
-      .then((m) => { state.selfMember = m; refreshDataSections(); })
+      .then((m) => { state.selfMember = m; refreshDataUI(container, state); })
       .catch(() => { /* nem kritikus */ });
   }
 }
@@ -554,145 +544,167 @@ function renderVolleyballArt(): string {
 }
 
 // ─── Event handling ───
-function attachHandlers(container: HTMLElement, state: OverviewState) {
+
+/**
+ * Egyszer hívandó — event delegation a container-en.
+ * Soha nem halmozódnak fel duplikált listenerek, mert a container egy stabil
+ * DOM elem, és a delegált click/touch egyetlen handler-en keresztül fut.
+ */
+function attachDelegatedHandlers(container: HTMLElement, state: OverviewState) {
+  // ── Tooltip (egyszer) ──
   attachTooltip(container);
 
-  const scroller = container.querySelector<HTMLDivElement>('#date-scroller')!;
-  const rail = container.querySelector<HTMLElement>('#date-rail'); // null desktop alatt is, mert hidden
+  // ── Segédfüggvény: UI frissítés dátum-váltás vagy adat-változás után ──
+  const refreshUI = (scrollSmooth = false) => {
+    const heroWrapper = container.querySelector<HTMLElement>('#hero-wrapper');
+    if (heroWrapper) heroWrapper.innerHTML = renderHero(state);
 
-  // Scroller horizontális scroll — csak a scroller-t scrollozzuk, nem az oldalt
-  const scrollToSelected = (smooth = false) => {
-    const chip = scroller.querySelector<HTMLButtonElement>(`[data-date="${state.selected}"]`);
-    if (!chip) return;
-    const targetLeft = chip.offsetLeft - (scroller.offsetWidth - chip.offsetWidth) / 2;
-    scroller.scrollTo({ left: Math.max(0, targetLeft), behavior: smooth ? 'smooth' : 'instant' });
-  };
+    const scroller = container.querySelector<HTMLElement>('#date-scroller');
+    if (scroller) scroller.innerHTML = state.dates.map((d) => renderDateChip(d, state)).join('');
 
-  requestAnimationFrame(() => scrollToSelected(false));
-
-  // Központosított dátum-váltás logika (mind a mobil chip-ekből, mind a desktop rail-ből)
-  const selectDate = (date: string) => {
-    if (date === state.selected) return;
-    state.selected = date;
-
-    // Hero
-    const heroWrapper = container.querySelector<HTMLElement>('#hero-wrapper')!;
-    heroWrapper.innerHTML = renderHero(state);
-
-    // Mobil chip-ek
-    scroller.innerHTML = state.dates.map((d) => renderDateChip(d, state)).join('');
-
-    // Desktop rail
+    const rail = container.querySelector<HTMLElement>('#date-rail');
     if (rail) rail.innerHTML = renderDateRailItems(state);
 
-    // Résztvevő-lista
-    const resultEl = container.querySelector<HTMLElement>('#result-main')!;
-    resultEl.innerHTML = renderResult(state);
-
-    // Scroller középre görget
-    requestAnimationFrame(() => scrollToSelected(true));
-  };
-
-  // Mobil scroller click
-  scroller.addEventListener('click', (e) => {
-    const target = (e.target as HTMLElement).closest<HTMLButtonElement>('.date-btn');
-    if (!target || target.getAttribute('aria-disabled') === 'true') return;
-    if (target.dataset.date) selectDate(target.dataset.date);
-  });
-
-  // Desktop rail click
-  rail?.addEventListener('click', (e) => {
-    const target = (e.target as HTMLElement).closest<HTMLButtonElement>('.date-rail-btn');
-    if (!target || target.getAttribute('aria-disabled') === 'true') return;
-    if (target.dataset.date) selectDate(target.dataset.date);
-  });
-
-  // Szerkesztés mód toggle
-  container.querySelector<HTMLButtonElement>('#attendees-edit-toggle')?.addEventListener('click', () => {
-    state.editMode = !state.editMode;
     const resultEl = container.querySelector<HTMLElement>('#result-main');
     if (resultEl) resultEl.innerHTML = renderResult(state);
-    attachHandlers(container, state);
-  });
 
-  // Résztvevő kattintás szerkesztés módban — delete dialog megnyitása
-  container.querySelectorAll<HTMLButtonElement>('[data-action="remove-attendee"]').forEach((btn) => {
-    btn.addEventListener('click', () => {
-      const name = btn.dataset.name;
+    scrollDateChipIntoView(container, state, scrollSmooth);
+  };
+
+  // ── Egyetlen delegált click handler a teljes container-re ──
+  container.addEventListener('click', async (e) => {
+    const target = e.target as HTMLElement;
+
+    // 1) Dátum chip (mobil scroller)
+    const dateBtn = target.closest<HTMLButtonElement>('.date-btn');
+    if (dateBtn && dateBtn.getAttribute('aria-disabled') !== 'true' && dateBtn.dataset.date) {
+      const date = dateBtn.dataset.date;
+      if (date !== state.selected) {
+        state.selected = date;
+        state.editMode = false;
+        refreshUI(true);
+      }
+      return;
+    }
+
+    // 2) Dátum rail sor (desktop)
+    const railBtn = target.closest<HTMLButtonElement>('.date-rail-btn');
+    if (railBtn && railBtn.getAttribute('aria-disabled') !== 'true' && railBtn.dataset.date) {
+      const date = railBtn.dataset.date;
+      if (date !== state.selected) {
+        state.selected = date;
+        state.editMode = false;
+        refreshUI(true);
+      }
+      return;
+    }
+
+    // 3) Szerkesztés mód toggle
+    if (target.closest('#attendees-edit-toggle')) {
+      state.editMode = !state.editMode;
+      const resultEl = container.querySelector<HTMLElement>('#result-main');
+      if (resultEl) resultEl.innerHTML = renderResult(state);
+      return;
+    }
+
+    // 4) Résztvevő törlés — delete dialog megnyitása
+    const removeBtn = target.closest<HTMLButtonElement>('[data-action="remove-attendee"]');
+    if (removeBtn) {
+      const name = removeBtn.dataset.name;
       if (!name) return;
       state.pendingDelete = { name, date: state.selected };
       container.querySelector<HTMLElement>('#delete-confirm-overlay')?.remove();
       const device = container.querySelector<HTMLElement>('.device');
       if (device) device.insertAdjacentHTML('beforeend', renderDeleteConfirmModal(state));
-      attachHandlers(container, state);
-    });
-  });
+      return;
+    }
 
-  // Modal: Igen (törlés)
-  container.querySelector<HTMLButtonElement>('#delete-confirm-yes')?.addEventListener('click', async () => {
-    if (!state.pendingDelete || state.deleting) return;
-    const { name, date } = state.pendingDelete;
-    state.deleting = true;
-    // re-render only the modal
-    const overlay = container.querySelector<HTMLElement>('#delete-confirm-overlay');
-    if (overlay) overlay.outerHTML = renderDeleteConfirmModal(state);
-    attachHandlers(container, state);
-    try {
-      await deleteAttendanceForPlayerOnDate(name, date);
-      // Firestore frissítés — újra le kell kérni az aznapi névsort
-      const fresh = await getAttendeesByDates([date]);
-      state.attendeesByDate.set(date, fresh.get(date) ?? []);
-    } catch (err) {
-      console.warn('[overview] Delete failed:', err);
-    } finally {
-      state.deleting = false;
+    // 5) Modal: Igen (törlés megerősítése)
+    if (target.closest('#delete-confirm-yes')) {
+      if (!state.pendingDelete || state.deleting) return;
+      const { name, date } = state.pendingDelete;
+      state.deleting = true;
+      // re-render only the modal
+      const overlay = container.querySelector<HTMLElement>('#delete-confirm-overlay');
+      if (overlay) overlay.outerHTML = renderDeleteConfirmModal(state);
+      try {
+        await deleteAttendanceForPlayerOnDate(name, date);
+        // Firestore frissítés — újra le kell kérni az aznapi névsort
+        const fresh = await getAttendeesByDates([date]);
+        state.attendeesByDate.set(date, fresh.get(date) ?? []);
+      } catch (err) {
+        console.warn('[overview] Delete failed:', err);
+      } finally {
+        state.deleting = false;
+        state.pendingDelete = null;
+        // Teljes újra-render — kártyák, hero count, dátum-rail mind frissül
+        refreshUI(false);
+        const overlay2 = container.querySelector<HTMLElement>('#delete-confirm-overlay');
+        if (overlay2) overlay2.remove();
+      }
+      return;
+    }
+
+    // 6) Modal: Mégse
+    if (target.closest('#delete-confirm-no')) {
+      if (state.deleting) return;
       state.pendingDelete = null;
-      // Teljes újra-render — kártyák, hero count, dátum-rail mind frissül
+      container.querySelector<HTMLElement>('#delete-confirm-overlay')?.remove();
+      return;
+    }
+
+    // 7) Modal: overlay háttérre kattintás (bezárás)
+    if (target.id === 'delete-confirm-overlay') {
+      if (state.deleting) return;
+      state.pendingDelete = null;
+      container.querySelector<HTMLElement>('#delete-confirm-overlay')?.remove();
+      return;
+    }
+
+    // 8) Önregisztráció
+    if (target.closest('#self-reg-btn')) {
+      if (!state.selfMember || state.selfRegistering) return;
+      const isGoing = (state.attendeesByDate.get(state.selected) ?? []).includes(state.selfMember.name);
+      state.selfRegistering = true;
       const heroWrapper = container.querySelector<HTMLElement>('#hero-wrapper');
       if (heroWrapper) heroWrapper.innerHTML = renderHero(state);
-      const resultEl = container.querySelector<HTMLElement>('#result-main');
-      if (resultEl) resultEl.innerHTML = renderResult(state);
-      const rail = container.querySelector<HTMLElement>('#date-rail');
-      if (rail) rail.innerHTML = renderDateRailItems(state);
-      const scroller2 = container.querySelector<HTMLElement>('#date-scroller');
-      if (scroller2) scroller2.innerHTML = state.dates.map((d) => renderDateChip(d, state)).join('');
-      const overlay2 = container.querySelector<HTMLElement>('#delete-confirm-overlay');
-      if (overlay2) overlay2.remove();
-      attachHandlers(container, state);
+      try {
+        await upsertSelfRegistration(state.selfMember.name, state.selected, isGoing ? 'No' : 'Yes');
+        // Frissített jelenlétek lekérése
+        const fresh = await getAttendeesByDates([state.selected]);
+        state.attendeesByDate.set(state.selected, fresh.get(state.selected) ?? []);
+      } finally {
+        state.selfRegistering = false;
+      }
+      refreshUI(false);
+      return;
     }
   });
+}
 
-  // Modal: Mégse / overlay-re kattintás
-  const closeModal = () => {
-    if (state.deleting) return;
-    state.pendingDelete = null;
-    const overlay = container.querySelector<HTMLElement>('#delete-confirm-overlay');
-    if (overlay) overlay.remove();
-  };
-  container.querySelector<HTMLButtonElement>('#delete-confirm-no')?.addEventListener('click', closeModal);
-  container.querySelector<HTMLElement>('#delete-confirm-overlay')?.addEventListener('click', (e) => {
-    if ((e.target as HTMLElement).id === 'delete-confirm-overlay') closeModal();
+/** Scroll-pozíció frissítése — biztonságos, ha a scroller nem létezik. */
+function scrollDateChipIntoView(container: HTMLElement, state: OverviewState, smooth: boolean) {
+  const scroller = container.querySelector<HTMLDivElement>('#date-scroller');
+  if (!scroller) return;
+  requestAnimationFrame(() => {
+    const chip = scroller.querySelector<HTMLButtonElement>(`[data-date="${state.selected}"]`);
+    if (!chip) return;
+    const targetLeft = chip.offsetLeft - (scroller.offsetWidth - chip.offsetWidth) / 2;
+    scroller.scrollTo({ left: Math.max(0, targetLeft), behavior: smooth ? 'smooth' : 'instant' });
   });
+}
 
-  // Önregisztráció
-  container.querySelector<HTMLButtonElement>('#self-reg-btn')?.addEventListener('click', async () => {
-    if (!state.selfMember || state.selfRegistering) return;
-    const heroWrapper = container.querySelector<HTMLElement>('#hero-wrapper')!;
-    const isGoing = (state.attendeesByDate.get(state.selected) ?? []).includes(state.selfMember.name);
-    state.selfRegistering = true;
-    heroWrapper.innerHTML = renderHero(state);
-    try {
-      await upsertSelfRegistration(state.selfMember.name, state.selected, isGoing ? 'No' : 'Yes');
-      // Frissített jelenlétek lekérése
-      const fresh = await getAttendeesByDates([state.selected]);
-      state.attendeesByDate.set(state.selected, fresh.get(state.selected) ?? []);
-    } finally {
-      state.selfRegistering = false;
-    }
-    heroWrapper.innerHTML = renderHero(state);
-    attachHandlers(container, state);
-    container.querySelector<HTMLElement>('#result-main')!.innerHTML = renderResult(state);
-  });
+/** Adat-frissítés utáni könnyű DOM-csere — NEM köt új event listenereket. */
+function refreshDataUI(container: HTMLElement, state: OverviewState) {
+  const hero = container.querySelector<HTMLElement>('#hero-wrapper');
+  if (hero) hero.innerHTML = renderHero(state);
+  const result = container.querySelector<HTMLElement>('#result-main');
+  if (result) result.innerHTML = renderResult(state);
+  const rail = container.querySelector<HTMLElement>('#date-rail');
+  if (rail) rail.innerHTML = renderDateRailItems(state);
+  const scroller = container.querySelector<HTMLElement>('#date-scroller');
+  if (scroller) scroller.innerHTML = state.dates.map((d) => renderDateChip(d, state)).join('');
+  scrollDateChipIntoView(container, state, false);
 }
 
 // ─── Utils ───
