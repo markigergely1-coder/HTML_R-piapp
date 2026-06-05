@@ -388,9 +388,13 @@ function renderAttendeesSection(attendees: string[], state: OverviewState): stri
 
   const editBtn = `
     <button id="attendees-edit-toggle" type="button"
-      class="text-[11px] font-semibold px-2.5 py-1 rounded-full transition-colors"
-      style="background:${editing ? 'var(--danger)' : 'var(--bg-elev)'};color:${editing ? '#fff' : 'var(--fg-2)'};border:1px solid ${editing ? 'var(--danger)' : 'var(--line)'}">
-      ${editing ? 'Kész' : 'Szerkesztés'}
+      class="text-[11px] font-semibold px-2.5 py-1.5 rounded-full"
+      style="background:${editing ? 'var(--danger)' : 'var(--bg-elev)'};color:${editing ? '#fff' : 'var(--fg-2)'};border:1px solid ${editing ? 'var(--danger)' : 'var(--line)'};transition:transform 120ms ease,background 180ms ease,color 180ms ease;cursor:pointer;-webkit-tap-highlight-color:rgba(0,0,0,0.08);user-select:none;-webkit-user-select:none"
+      ontouchstart="this.style.transform='scale(0.9)'"
+      ontouchend="this.style.transform=''"
+      onmousedown="this.style.transform='scale(0.9)'"
+      onmouseup="this.style.transform=''">
+      ${editing ? '✓ Kész' : '✎ Szerkesztés'}
     </button>`;
 
   return `
@@ -580,6 +584,7 @@ function attachDelegatedHandlers(container: HTMLElement, state: OverviewState) {
   };
 
   // ── Egyetlen delegált click handler a teljes container-re ──
+  console.log('[overview] 🟢 Delegated handler attached, signal:', signal.aborted ? 'ABORTED' : 'ACTIVE');
   container.addEventListener('click', async (e) => {
     const target = e.target as HTMLElement;
 
@@ -610,6 +615,8 @@ function attachDelegatedHandlers(container: HTMLElement, state: OverviewState) {
     // 3) Szerkesztés mód toggle
     if (target.closest('#attendees-edit-toggle')) {
       state.editMode = !state.editMode;
+      console.log('[overview] ✏️ Edit toggle →', state.editMode);
+      showDebugToast(container, `Edit: ${state.editMode ? 'ON' : 'OFF'}`);
       const resultEl = container.querySelector<HTMLElement>('#result-main');
       if (resultEl) resultEl.innerHTML = renderResult(state);
       return;
@@ -713,6 +720,25 @@ function refreshDataUI(container: HTMLElement, state: OverviewState) {
   const scroller = container.querySelector<HTMLElement>('#date-scroller');
   if (scroller) scroller.innerHTML = state.dates.map((d) => renderDateChip(d, state)).join('');
   scrollDateChipIntoView(container, state, false);
+}
+
+/** Látható debug toast — rövid villanás a képernyő tetején, hogy a kattintás regisztrálódott. */
+function showDebugToast(container: HTMLElement, msg: string) {
+  const existing = container.querySelector('#debug-toast');
+  if (existing) existing.remove();
+  const el = document.createElement('div');
+  el.id = 'debug-toast';
+  el.textContent = `🔧 ${msg}`;
+  el.style.cssText = [
+    'position:fixed', 'top:8px', 'left:50%', 'transform:translateX(-50%)',
+    'z-index:9999', 'padding:6px 16px', 'border-radius:999px',
+    'background:#059669', 'color:white', 'font-size:12px', 'font-weight:600',
+    'box-shadow:0 4px 12px rgba(0,0,0,0.2)', 'pointer-events:none',
+    'opacity:1', 'transition:opacity 300ms ease',
+  ].join(';');
+  document.body.appendChild(el);
+  setTimeout(() => { el.style.opacity = '0'; }, 1200);
+  setTimeout(() => { el.remove(); }, 1600);
 }
 
 // ─── Utils ───
