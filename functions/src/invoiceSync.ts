@@ -63,6 +63,7 @@ export const syncInvoicesFromEmail = onSchedule(
         let newInvoiceCount = 0;
 
         for await (const msg of messages) {
+          if (!msg.envelope) continue;
           const emailDate = msg.envelope.date || new Date();
           
           // Kiszámoljuk a cél hónapot ugyanazzal a logikával
