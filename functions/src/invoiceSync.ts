@@ -18,9 +18,23 @@ export const syncInvoicesFromEmail = onSchedule(
     timeoutSeconds: 300,
   },
   async (event) => {
-    console.log('Indul az email alapú számlafeldolgozás...');
+    console.log('Indul az email alapú számlafeldolgozás (ÖSSZES email ellenőrzésével)...');
     
-    // 1. Gmail IMAP kapcsolat
+    // 1. Meglévő számlák lekérése a Firestore-ból (hogy tudjuk, mit NE töltsünk le)
+    const db = admin.firestore();
+    const invoicesRef = db.collection(FIRESTORE_INVOICES);
+    const existingDocs = await invoicesRef.get();
+    
+    // Készítünk egy gyors keresőtömböt az eddigi hónapokhoz (pl. "2026-12")
+    const existingMonths = new Set<string>();
+    existingDocs.forEach(doc => {
+      const data = doc.data();
+      existingMonths.add(`${data.target_year}-${data.target_month}`);
+    });
+
+    console.log(`Firestore-ból betöltve ${existingMonths.size} db korábbi számla hónap.`);
+
+    // 2. Gmail IMAP kapcsolat
     const client = new ImapFlow({
       host: 'imap.gmail.com',
       port: 993,
@@ -29,47 +43,61 @@ export const syncInvoicesFromEmail = onSchedule(
         user: GMAIL_USER.value(),
         pass: GMAIL_PASS.value(),
       },
-      logger: false, // Ne szemetelje tele a logot
+      logger: false,
     });
 
     try {
       await client.connect();
       console.log('IMAP kapcsolat sikeres.');
 
-      // 2. Olvasatlan levelek keresése a megadott feladótól
       const lock = await client.getMailboxLock('INBOX');
       try {
         const searchCriteria = {
           from: EMAIL_SENDER,
-          subject: 'Számla',
-          seen: false, // Csak az olvasatlanok
+          subject: 'Számla'
+          // Nincs 'seen: false', tehát az összeset megtalálja
         };
 
-        const messages = client.fetch(searchCriteria, { source: true, uid: true });
+        // CSAK A FEJLÉCEKET (envelope) kérjük le először, hogy gyors legyen és ne egye a RAM-ot
+        const messages = client.fetch(searchCriteria, { envelope: true, uid: true });
         let newInvoiceCount = 0;
 
         for await (const msg of messages) {
-          console.log(`Új levél feldolgozása, UID: ${msg.uid}`);
+          const emailDate = msg.envelope.date || new Date();
           
-          if (!msg.source) {
-            console.log('Nincs levél forrás, ugrás...');
-            continue;
+          // Kiszámoljuk a cél hónapot ugyanazzal a logikával
+          let targetMonth = emailDate.getMonth(); // 0-indexed -> ez lesz az előző hónap 1-indexed formája!
+          let targetYear = emailDate.getFullYear();
+          if (targetMonth === 0) {
+            targetMonth = 12;
+            targetYear -= 1;
           }
 
-          const parsedMail = await simpleParser(msg.source);
-          const emailDate = parsedMail.date || new Date();
+          const monthKey = `${targetYear}-${targetMonth}`;
+
+          // Ellenőrizzük, hogy ez a hónap már benne van-e az adatbázisban
+          if (existingMonths.has(monthKey)) {
+            console.log(`[SKIPPED] ${monthKey} már megvan az adatbázisban (UID: ${msg.uid}). Nem töltjük le a PDF-et.`);
+            continue; // Ugrás a következőre (PDF letöltése nélkül!)
+          }
+
+          console.log(`[FELDOLGOZÁS] Új vagy hiányzó hónap: ${monthKey} (UID: ${msg.uid}). PDF letöltése...`);
           
+          // Csak most kérjük le a teljes levelet a PDF-el együtt, ha még nincs meg az adatbázisban!
+          const fullMsg = await client.fetchOne(msg.uid, { source: true });
+          if (!fullMsg || !fullMsg.source) {
+             console.log('Hiba a levél letöltésekor, ugrás...');
+             continue;
+          }
+
+          const parsedMail = await simpleParser(fullMsg.source);
           let invoiceSaved = false;
 
-          // Csatolmányok keresése
           for (const attachment of parsedMail.attachments) {
             if (attachment.contentType === 'application/pdf') {
-              console.log(`PDF csatolmány találva: ${attachment.filename}`);
-              
               const pdfData = await pdfParse(attachment.content as Buffer);
               const text = pdfData.text;
 
-              // Regex az összeg kinyerésére
               const regex = /(Végösszeg|Fizetendő|Összesen)\s*:?\s*([\d\s\.]+)\s*(Ft|HUF)/i;
               const match = regex.exec(text);
               
@@ -78,7 +106,6 @@ export const syncInvoicesFromEmail = onSchedule(
                 const amountStr = match[2].replace(/[\s\xa0\.]/g, '');
                 amount = parseInt(amountStr, 10);
               } else {
-                // Alternatív fallback keresés
                 const altRegex = /(?<!\d)([\d\s\.]+)\s*(Ft|HUF)/ig;
                 let altMatch;
                 let lastAltMatch = null;
@@ -92,57 +119,23 @@ export const syncInvoicesFromEmail = onSchedule(
               }
 
               if (amount) {
-                // Hónap számítása: Mindig az email érkezésének ELŐZŐ hónapja
-                let targetMonth = emailDate.getMonth(); // 0-indexed, so getMonth() is the previous month (1-12 in our logic)!
-                let targetYear = emailDate.getFullYear();
+                const invDateStr = emailDate.toISOString().split('T')[0];
                 
-                // Ha január van (getMonth() == 0), akkor a célhónap december (12), és előző év.
-                if (targetMonth === 0) {
-                  targetMonth = 12;
-                  targetYear -= 1;
-                }
-
-                // Csekkoljuk a duplikációkat a Firestore-ban
-                const db = admin.firestore();
-                const invoicesRef = db.collection(FIRESTORE_INVOICES);
+                await invoicesRef.add({
+                  inv_date: invDateStr,
+                  target_year: targetYear,
+                  target_month: targetMonth,
+                  amount: amount,
+                  filename: attachment.filename || 'szamla.pdf'
+                });
                 
-                // Lekérjük az összeset (mivel valószínűleg nem sok van) vagy specifikusan egyet.
-                // Itt most ellenőrizzük az évet és a hónapot, és az összeget.
-                const querySnapshot = await invoicesRef
-                  .where('target_year', '==', targetYear)
-                  .where('target_month', '==', targetMonth)
-                  .where('amount', '==', amount)
-                  .get();
-
-                if (!querySnapshot.empty) {
-                  console.log(`Már létező számla a Firestore-ban: ${targetYear}. ${targetMonth} hó, ${amount} Ft. Nem mentem újra.`);
-                } else {
-                  // Hozzáadjuk a Firestore-hoz
-                  const invDateStr = emailDate.toISOString().split('T')[0]; // YYYY-MM-DD
-                  
-                  await invoicesRef.add({
-                    inv_date: invDateStr,
-                    target_year: targetYear,
-                    target_month: targetMonth,
-                    amount: amount,
-                    filename: attachment.filename || 'szamla.pdf'
-                  });
-                  console.log(`+ Rögzítve a Firestore-ba: ${targetYear}. ${targetMonth}. hóhoz, ${amount} Ft`);
-                  newInvoiceCount++;
-                }
-                
+                console.log(`+ Rögzítve a Firestore-ba: ${targetYear}. ${targetMonth}. hóhoz, ${amount} Ft`);
+                existingMonths.add(monthKey); // Hozzáadjuk a set-hez, hogy ezen a futáson belül se töltsük le újra
+                newInvoiceCount++;
                 invoiceSaved = true;
-                break; // Csak az első PDF-et dolgozzuk fel elemenként
-              } else {
-                console.log('Nem található összeg a PDF-ben.');
+                break;
               }
             }
-          }
-
-          // Ha sikeresen feldolgoztuk, megjelöljük olvasottként
-          if (invoiceSaved) {
-            await client.messageFlagsAdd({ uid: msg.uid }, ['\\Seen'], { uid: true });
-            console.log(`Levél (UID: ${msg.uid}) olvasottnak jelölve.`);
           }
         }
         
