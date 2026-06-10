@@ -1,9 +1,11 @@
 import { defineConfig } from 'vite';
 import tailwindcss from '@tailwindcss/vite';
 import { VitePWA } from 'vite-plugin-pwa';
+import { svelte } from '@sveltejs/vite-plugin-svelte';
 
 export default defineConfig({
   plugins: [
+    svelte(),
     tailwindcss(),
     VitePWA({
       registerType: 'autoUpdate',

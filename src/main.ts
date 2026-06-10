@@ -1,5 +1,6 @@
+import { mount } from 'svelte';
 import './style.css';
-import { startRouter } from './router';
+import App from './App.svelte';
 import { maybeShowInAppBanner } from './lib/inappBrowser';
 import { setupPwa } from './lib/pwa';
 import { applyTheme, watchSystemTheme } from './lib/theme';
@@ -12,7 +13,7 @@ applyTheme();
 watchSystemTheme();
 
 const app = document.querySelector<HTMLDivElement>('#app')!;
-startRouter(app);
+mount(App, { target: app });
 
 // Telepített PWA-ban: első bejelentkezésnél megkérdezzük engedélyezi-e a push-t
 setupAutoPushPrompt();

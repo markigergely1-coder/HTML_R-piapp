@@ -1,0 +1,7 @@
+functions-framework==3.*
+imaplib2
+pdfplumber
+gspread
+oauth2client
+google-api-python-client
+google-cloud-firestore

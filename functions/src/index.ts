@@ -28,6 +28,9 @@ admin.initializeApp();
 // Push notification function-ök re-exportja
 export { tuesdayReminder, onCancellation, onAttendanceFullTeam } from './notifications';
 
+// Email invoice processing re-exportja
+export { syncInvoicesFromEmail } from './invoiceSync';
+
 // Diagnosztika oldalról hívható teszt push (admin-only).
 // A megadott member összes engedélyezett eszközére küld push-t, NEM ellenőrzi
 // a prefs-et (mert tesztelni akarjuk a működést). Visszatér eszköz-szintű
