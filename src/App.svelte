@@ -29,14 +29,14 @@
       const qIdx = raw.indexOf('?');
       hash = qIdx >= 0 ? raw.slice(0, qIdx) : raw;
       
-      if (!initialRedirectDone && /^#?\/?$/.test(hash)) {
+      if (!initialRedirectDone && !authState.loading) {
+        initialRedirectDone = true;
         if (
-          !authState.loading &&
+          /^#?\/?$/.test(hash) &&
           authState.user &&
           !authState.isAdmin &&
           !OVERVIEW_KEEP_EMAILS.has(authState.user.email?.toLowerCase() ?? '')
         ) {
-          initialRedirectDone = true;
           window.location.hash = '#/me';
           return;
         }
