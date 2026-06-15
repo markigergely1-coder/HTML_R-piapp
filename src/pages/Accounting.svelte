@@ -627,8 +627,7 @@
             <!-- Messenger Copy Buttons -->
             <div class="px-4 pt-1 pb-4 flex gap-2">
               <button onclick={() => handleMessengerCopy(false)}
-                class="flex-1 inline-flex items-center justify-center gap-1.5 px-3 py-2.5 rounded-full text-[12px] font-semibold transition-all"
-                style="background:color-mix(in oklab,#0084ff 14%,transparent);color:#0066cc;border:1px solid color-mix(in oklab,#0084ff 25%,transparent)"
+                class="msg-btn-blue flex-1 inline-flex items-center justify-center gap-1.5 px-3 py-2.5 rounded-full text-[12px] font-semibold transition-all"
                 title="Összes fizető személy szövege vágólapra (plusz emberek nélkül)">
                 {#if messengerCopied === 'all'}
                   <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>
@@ -639,8 +638,7 @@
                 {/if}
               </button>
               <button onclick={() => handleMessengerCopy(true)}
-                class="flex-1 inline-flex items-center justify-center gap-1.5 px-3 py-2.5 rounded-full text-[12px] font-semibold transition-all"
-                style="background:color-mix(in oklab,#f59e0b 14%,transparent);color:#92400e;border:1px solid color-mix(in oklab,#f59e0b 25%,transparent)"
+                class="msg-btn-amber flex-1 inline-flex items-center justify-center gap-1.5 px-3 py-2.5 rounded-full text-[12px] font-semibold transition-all"
                 title="Csak nem-tagok (akik nem kaphattak emailt) szövege vágólapra">
                 {#if messengerCopied === 'nonmember'}
                   <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>
