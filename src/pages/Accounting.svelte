@@ -61,6 +61,7 @@
   let emailResult = $state<{ sent: number; failed: { to: string; reason: string }[]; adminSent: boolean } | null>(null);
   let toast = $state<{ kind: 'success' | 'error' | 'info'; msg: string } | null>(null);
   let toastTimer: number | null = null;
+  let messengerCopied = $state<'all' | 'nonmember' | null>(null);
 
   // Derived Values
   let totalAmount = $derived(invoices.reduce((s, i) => s + i.amount, 0));
@@ -360,6 +361,69 @@
     }
   }
 
+  /**
+   * Generates a Messenger-friendly text listing people and amounts.
+   * @param onlyNonMembers — if true, only includes people who are NOT active members with email
+   */
+  function buildMessengerText(onlyNonMembers: boolean): string {
+    if (!loadedCalc) return '';
+
+    const inv = invoices.find((i) => i.id === selectedInvoiceId);
+    const monthName = 'monthName' in loadedCalc ? loadedCalc.monthName : (inv ? MONTHS_HU[inv.target_month - 1] ?? '' : '');
+
+    // Build a set of active member names with email
+    const memberNamesWithEmail = new Set<string>();
+    for (const m of members) {
+      if (m.name && m.email && m.active) {
+        memberNamesWithEmail.add(m.name.trim());
+      }
+    }
+
+    // Filter: main people only (no " - " in name = not a guest/plusz ember), amount > 0
+    // Then aggregate: for each main person, add guest amounts too
+    const mainRows = loadedCalc.perPerson.filter((p) => !p.name.includes(' - ') && p.amount > 0);
+
+    const lines: string[] = [];
+    for (const main of mainRows) {
+      // Calculate total including their guests
+      const prefix = `${main.name} - `;
+      const guestTotal = loadedCalc.perPerson
+        .filter((p) => p.name.startsWith(prefix))
+        .reduce((s, p) => s + p.amount, 0);
+      const total = main.amount + guestTotal;
+      if (total <= 0) continue;
+
+      // If onlyNonMembers, skip people who ARE active members with email
+      if (onlyNonMembers && memberNamesWithEmail.has(main.name)) continue;
+
+      lines.push(`@${main.name} - ${formatHuf(total)}`);
+    }
+
+    if (lines.length === 0) return '';
+
+    // "a" vs "az" depending on month name starting with vowel
+    const vowels = 'AÁEÉIÍOÓÖŐUÚÜŰaáeéiíoóöőuúüű';
+    const az = vowels.includes(monthName.charAt(0)) ? 'az' : 'a';
+
+    return `Sziasztok, Megjött ${az} ${monthName} havi számla: Itt\n${lines.join('\n')}`;
+  }
+
+  async function handleMessengerCopy(onlyNonMembers: boolean) {
+    const text = buildMessengerText(onlyNonMembers);
+    if (!text) {
+      showToast('error', onlyNonMembers ? 'Nincs nem-tag személy ebben a hónapban.' : 'Nincs másolható adat.');
+      return;
+    }
+    try {
+      await navigator.clipboard.writeText(text);
+      messengerCopied = onlyNonMembers ? 'nonmember' : 'all';
+      showToast('success', '📋 Szöveg vágólapra másolva!');
+      setTimeout(() => { messengerCopied = null; }, 2000);
+    } catch {
+      showToast('error', '❌ Nem sikerült a vágólapra másolni.');
+    }
+  }
+
   function handleSignIn() {
     signIn().catch(console.warn);
   }
@@ -558,6 +622,34 @@
                   {/if}
                 </table>
               </div>
+            </div>
+
+            <!-- Messenger Copy Buttons -->
+            <div class="px-4 pt-1 pb-4 flex gap-2">
+              <button onclick={() => handleMessengerCopy(false)}
+                class="flex-1 inline-flex items-center justify-center gap-1.5 px-3 py-2.5 rounded-full text-[12px] font-semibold transition-all"
+                style="background:color-mix(in oklab,#0084ff 14%,transparent);color:#0066cc;border:1px solid color-mix(in oklab,#0084ff 25%,transparent)"
+                title="Összes fizető személy szövege vágólapra (plusz emberek nélkül)">
+                {#if messengerCopied === 'all'}
+                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>
+                  Másolva!
+                {:else}
+                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M21 11.5a8.38 8.38 0 0 1-.9 3.8 8.5 8.5 0 0 1-7.6 4.7 8.38 8.38 0 0 1-3.8-.9L3 21l1.9-5.7a8.38 8.38 0 0 1-.9-3.8 8.5 8.5 0 0 1 4.7-7.6 8.38 8.38 0 0 1 3.8-.9h.5a8.48 8.48 0 0 1 8 8v.5z"/></svg>
+                  Messenger – összes
+                {/if}
+              </button>
+              <button onclick={() => handleMessengerCopy(true)}
+                class="flex-1 inline-flex items-center justify-center gap-1.5 px-3 py-2.5 rounded-full text-[12px] font-semibold transition-all"
+                style="background:color-mix(in oklab,#f59e0b 14%,transparent);color:#92400e;border:1px solid color-mix(in oklab,#f59e0b 25%,transparent)"
+                title="Csak nem-tagok (akik nem kaphattak emailt) szövege vágólapra">
+                {#if messengerCopied === 'nonmember'}
+                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>
+                  Másolva!
+                {:else}
+                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M21 11.5a8.38 8.38 0 0 1-.9 3.8 8.5 8.5 0 0 1-7.6 4.7 8.38 8.38 0 0 1-3.8-.9L3 21l1.9-5.7a8.38 8.38 0 0 1-.9-3.8 8.5 8.5 0 0 1 4.7-7.6 8.38 8.38 0 0 1 3.8-.9h.5a8.48 8.48 0 0 1 8 8v.5z"/></svg>
+                  Messenger – nem tagok
+                {/if}
+              </button>
             </div>
           </div>
 
