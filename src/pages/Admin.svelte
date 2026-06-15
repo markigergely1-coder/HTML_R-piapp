@@ -26,14 +26,18 @@
 
   // State
   let step = $state<1 | 2 | 3>(1);
-  let dates = $state<string[]>([]);
-  let selectedDate = $state<string>('');
+  let dates = $state<string[]>(pastTuesdaysForDisplay(9));
+  let selectedDate = $state<string>(pastTuesdaysForDisplay(9)[pastTuesdaysForDisplay(9).length - 1] ?? '');
   let dateMenuOpen = $state(false);
   let toast = $state<{ kind: 'success' | 'error'; msg: string } | null>(null);
   let saving = $state(false);
 
   // Map state for entries
-  let entries = $state<Map<string, AdminEntry>>(new Map());
+  const initialEntries = new Map<string, AdminEntry>();
+  for (const n of MAIN_NAME_LIST) {
+    initialEntries.set(n, { present: false, guestCount: 0, guestNames: [] });
+  }
+  let entries = $state<Map<string, AdminEntry>>(initialEntries);
   
   // Historical data for guests
   let historicalAll = $state<RawAttendance[]>([]);
@@ -48,16 +52,6 @@
 
   // Setup
   onMount(() => {
-    const ds = pastTuesdaysForDisplay(9);
-    dates = ds;
-    selectedDate = ds[ds.length - 1] ?? '';
-
-    const initialEntries = new Map<string, AdminEntry>();
-    for (const n of MAIN_NAME_LIST) {
-      initialEntries.set(n, { present: false, guestCount: 0, guestNames: [] });
-    }
-    entries = initialEntries;
-
     // Handle outside click for datepicker
     const handleOutsideClick = (e: MouseEvent) => {
       if (dateMenuOpen && !(e.target as Element).closest('#admin-datepicker')) {
