@@ -259,7 +259,7 @@
                 {@const yearPart = longParts[0]?.split('.')[0]?.trim() ?? ''}
                 {@const weekday = longParts[1]?.trim() ?? 'kedd'}
                 <button type="button" onclick={() => { selectedDate = d; dateMenuOpen = false; }}
-                  class="w-full flex items-center gap-3 px-3.5 py-2.5 text-left transition-colors hover:bg-[color:color-mix(in oklab,var(--accent) 10%,transparent)]"
+                  class="w-full flex items-center gap-3 px-3.5 py-2.5 text-left transition-colors hover:bg-[color-mix(in_oklab,var(--accent)_14%,transparent)]"
                   style="background:{isSel ? 'var(--accent)' : 'transparent'};color:{isSel ? '#fff' : 'inherit'};{isSel ? '' : 'border-top:1px solid var(--line);'}">
                   <div class="flex flex-col items-center flex-shrink-0" style="min-width:34px">
                     <span class="text-[9px] font-semibold uppercase tracking-widest"
