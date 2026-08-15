@@ -103,6 +103,9 @@
 
   function applyGuestCount(name: string, next: number) {
     const e = entries.get(name)!;
+    if (!e.present && next > e.guestCount) {
+      e.present = true;
+    }
     if (!e.present) return;
     const clamped = Math.max(0, Math.min(MAX_GUESTS, next));
     if (clamped === e.guestCount) return;
@@ -323,7 +326,7 @@
                 </label>
                 
                 <div class="admin-guest-stepper inline-flex items-center select-none {entry.guestCount > 0 ? 'is-active' : ''}"
-                     style="{entry.present ? '' : 'opacity:0.35;pointer-events:none;filter:saturate(0)'}">
+                     style="{entry.present ? '' : 'opacity:0.4;filter:saturate(0);transition:all 0.2s'}">
                   <button type="button" aria-label="Vendég csökkentése" class="stepper-btn {entry.guestCount <= 0 ? 'is-disabled' : ''}" disabled={entry.guestCount <= 0} onclick={() => applyGuestCount(name, entry.guestCount - 1)}>
                     <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
                       <path d="M4 8h8"/>
