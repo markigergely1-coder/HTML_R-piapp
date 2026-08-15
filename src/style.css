@@ -420,3 +420,4 @@ html, body {
     margin: 0 auto;
   }
 }
+.hover-bg-accent-light:hover { background-color: color-mix(in oklab, var(--accent) 14%, transparent); } 
