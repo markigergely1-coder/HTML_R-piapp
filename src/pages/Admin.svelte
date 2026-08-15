@@ -33,19 +33,19 @@
   let saving = $state(false);
 
   // Map state for entries
-  const initialEntries = new Map<string, AdminEntry>();
+  const initialEntries: Record<string, AdminEntry> = {};
   for (const n of MAIN_NAME_LIST) {
-    initialEntries.set(n, { present: false, guestCount: 0, guestNames: [] });
+    initialEntries[n] = { present: false, guestCount: 0, guestNames: [] };
   }
-  let entries = $state<Map<string, AdminEntry>>(initialEntries);
+  let entries = $state<Record<string, AdminEntry>>(initialEntries);
   
   // Historical data for guests
   let historicalAll = $state<RawAttendance[]>([]);
   let historicalLoading = $state(false);
 
   // Derived / Computed
-  let presentCount = $derived([...entries.values()].filter((e) => e.present).length);
-  let totalGuestCount = $derived([...entries.values()].filter((e) => e.present).reduce((s, e) => s + e.guestCount, 0));
+  let presentCount = $derived(Object.values(entries).filter((e) => e.present).length);
+  let totalGuestCount = $derived(Object.values(entries).filter((e) => e.present).reduce((s, e) => s + e.guestCount, 0));
   let step1Valid = $derived(presentCount > 0);
   
   let sortedDates = $derived([...dates].sort((a, b) => b.localeCompare(a)));
@@ -91,18 +91,16 @@
 
   // Actions
   function togglePresent(name: string, checked: boolean) {
-    const e = entries.get(name)!;
+    const e = entries[name]!;
     e.present = checked;
     if (!checked) {
       e.guestCount = 0;
       e.guestNames = [];
     }
-    entries.set(name, e);
-    entries = new Map(entries); // trigger reactivity
   }
 
   function applyGuestCount(name: string, next: number) {
-    const e = entries.get(name)!;
+    const e = entries[name]!;
     if (!e.present && next > e.guestCount) {
       e.present = true;
     }
@@ -112,19 +110,15 @@
     e.guestCount = clamped;
     while (e.guestNames.length < e.guestCount) e.guestNames.push('');
     e.guestNames.length = e.guestCount;
-    entries.set(name, e);
-    entries = new Map(entries);
   }
 
   function handleGuestNameChange(name: string, idx: number, val: string, isCustom: boolean) {
-    const e = entries.get(name)!;
+    const e = entries[name]!;
     if (isCustom) {
       e.guestNames[idx] = val;
     } else {
       e.guestNames[idx] = val;
     }
-    entries.set(name, e);
-    entries = new Map(entries);
   }
 
   async function handleSave() {
@@ -133,7 +127,7 @@
     try {
       const rows: NewAttendanceRow[] = [];
       for (const name of MAIN_NAME_LIST) {
-        const e = entries.get(name)!;
+        const e = entries[name]!;
         if (!e.present) continue;
         rows.push({ name, status: 'Yes', event_date: selectedDate, mode: 'valós' });
         for (let i = 0; i < e.guestCount; i++) {
@@ -148,13 +142,11 @@
       
       // Reset
       step = 1;
-      const nextEntries = new Map(entries);
-      for (const e of nextEntries.values()) {
-        e.present = false;
-        e.guestCount = 0;
-        e.guestNames = [];
+      for (const key in entries) {
+        entries[key].present = false;
+        entries[key].guestCount = 0;
+        entries[key].guestNames = [];
       }
-      entries = nextEntries;
     } catch (err) {
       showToast('error', `Hiba: ${String(err)}`);
     } finally {
@@ -312,7 +304,7 @@
           </div>
           <ul>
             {#each MAIN_NAME_LIST as name}
-              {@const entry = entries.get(name)!}
+              {@const entry = entries[name]!}
               {@const hue = avatarHue(name)}
               {@const initials = nameInitials(name)}
               <li class="flex items-center gap-3 px-4 py-2.5" style="border-top:1px solid var(--line)">
@@ -353,7 +345,7 @@
 
       {:else if step === 2}
         <!-- Step 2: Vendégek nevei -->
-        {@const hostsWithGuests = MAIN_NAME_LIST.filter(n => { const e = entries.get(n)!; return e.present && e.guestCount > 0; })}
+        {@const hostsWithGuests = MAIN_NAME_LIST.filter(n => { const e = entries[n]!; return e.present && e.guestCount > 0; })}
         
         {#if hostsWithGuests.length === 0}
           <div class="card-soft p-6 text-center fade-up" style="border-radius:22px">
@@ -364,7 +356,7 @@
         {:else}
           <div class="space-y-3">
             {#each hostsWithGuests as host}
-              {@const entry = entries.get(host)!}
+              {@const entry = entries[host]!}
               {@const history = getHistoricalGuests(host)}
               {@const hue = avatarHue(host)}
               {@const initials = nameInitials(host)}
@@ -425,7 +417,7 @@
 
       {:else if step === 3}
         <!-- Step 3: Mentés -->
-        {@const presentList = MAIN_NAME_LIST.filter((n) => entries.get(n)!.present)}
+        {@const presentList = MAIN_NAME_LIST.filter((n) => entries[n]!.present)}
         <div class="card p-4 fade-up">
           <p class="eyebrow text-[10px] mb-1">Dátum</p>
           <p class="text-[16px] font-semibold text-fg-1">{formatDateHuLong(selectedDate)}</p>
@@ -440,7 +432,7 @@
           </div>
           <ul>
             {#each presentList as name}
-              {@const entry = entries.get(name)!}
+              {@const entry = entries[name]!}
               {@const initials = nameInitials(name)}
               {@const hue = avatarHue(name)}
               {@const validGuests = entry.guestNames.slice(0, entry.guestCount).filter(g => g.trim())}
