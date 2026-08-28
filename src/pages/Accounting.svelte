@@ -246,6 +246,30 @@
     }
   }
 
+  async function handleDownloadExcel() {
+    if (!loadedCalc || loadedCalc.perPerson.length === 0) {
+      showToast('error', 'Nincs adat az Excel generáláshoz.');
+      return;
+    }
+    try {
+      const monthName = 'monthName' in loadedCalc ? loadedCalc.monthName : '';
+      const breakdown = 'breakdown' in loadedCalc ? loadedCalc.breakdown : undefined;
+      const { generateSettlementExcel, downloadExcel } = await import('../lib/excel');
+      const blob = generateSettlementExcel({
+        year: loadedCalc.year,
+        monthName,
+        perPerson: loadedCalc.perPerson,
+        breakdown,
+      });
+      const filename = `Havi_Elszamolas_${loadedCalc.year}_${monthName.replace(/\s+/g, '_')}.xlsx`;
+      downloadExcel(blob, filename);
+      showToast('success', '📥 Excel letöltve');
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      showToast('error', `❌ Excel hiba: ${msg}`);
+    }
+  }
+
   async function handleEmailSend() {
     if (!loadedCalc) return;
     const selected = emailRecipients.filter((r) => r.selected);
@@ -557,6 +581,15 @@
                     <path d="M8 2v9M5 8l3 3 3-3M3 13h10"/>
                   </svg>
                   PDF
+                </button>
+                <button onclick={handleDownloadExcel}
+                  class="text-[11.5px] font-semibold px-2.5 py-1 rounded-full transition-colors inline-flex items-center gap-1"
+                  style="background:rgba(16,185,129,0.14);color:#047857"
+                  title="Excel letöltése">
+                  <svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+                    <path d="M8 2v9M5 8l3 3 3-3M3 13h10"/>
+                  </svg>
+                  Excel
                 </button>
               </div>
             </div>

@@ -25,6 +25,7 @@
     "jspdf": "^4.2.1",
     "jspdf-autotable": "^5.0.7",
     "qrcode": "^1.5.4",
-    "svelte": "^5.56.2"
+    "svelte": "^5.56.2",
+    "xlsx": "^0.18.5"
   }
 }

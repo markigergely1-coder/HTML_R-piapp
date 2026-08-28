@@ -1,0 +1,101 @@
+/**
+ * Excel generálás a havi elszámoláshoz.
+ *
+ * SheetJS (xlsx) könyvtárat használ. Két sheet-et hoz létre:
+ *  1. „Összesítő" — személyenkénti összegzés (Név, Részvétel, Fizetendő)
+ *  2. „Bontás" — alkalomkénti bontás (Dátum, Költség/alkalom, Létszám, Költség/fő)
+ */
+
+import * as XLSX from 'xlsx';
+import type { SettlementPersonRow, SettlementBreakdownRow } from './firestore';
+
+export interface ExcelSettlementInput {
+  year: number;
+  monthName: string;
+  perPerson: SettlementPersonRow[];
+  breakdown?: SettlementBreakdownRow[];
+}
+
+/**
+ * Generálja az Excel workbook-ot Blob formában (.xlsx).
+ */
+export function generateSettlementExcel(input: ExcelSettlementInput): Blob {
+  const wb = XLSX.utils.book_new();
+
+  // --- Sheet 1: Összesítő (személy × összeg) ---
+  const summaryHeader = ['Név', 'Részvétel', 'Fizetendő (Ft)'];
+  const summaryRows = input.perPerson.map((p) => [
+    p.name,
+    p.count,
+    Math.round(p.amount),
+  ]);
+
+  const totalCount = input.perPerson.reduce((s, p) => s + p.count, 0);
+  const totalAmount = input.perPerson.reduce((s, p) => s + p.amount, 0);
+  summaryRows.push(['Összesen', totalCount, Math.round(totalAmount)]);
+
+  const summaryData = [
+    [`Havi Röplabda Elszámolás — ${input.year}. ${input.monthName}`],
+    [],
+    summaryHeader,
+    ...summaryRows,
+  ];
+
+  const wsSummary = XLSX.utils.aoa_to_sheet(summaryData);
+
+  // Oszlopszélességek
+  wsSummary['!cols'] = [
+    { wch: 30 },  // Név
+    { wch: 12 },  // Részvétel
+    { wch: 18 },  // Fizetendő
+  ];
+
+  XLSX.utils.book_append_sheet(wb, wsSummary, 'Összesítő');
+
+  // --- Sheet 2: Bontás (alkalmanként) ---
+  if (input.breakdown && input.breakdown.length > 0) {
+    const breakdownHeader = ['Dátum', 'Költség / alkalom (Ft)', 'Létszám', 'Költség / fő (Ft)'];
+    const breakdownRows = input.breakdown.map((b) => [
+      b.date,
+      Math.round(b.costPerSession),
+      b.attendeeCount,
+      Math.round(b.costPerPerson),
+    ]);
+
+    const breakdownData = [
+      [`Bontás alkalmanként — ${input.year}. ${input.monthName}`],
+      [],
+      breakdownHeader,
+      ...breakdownRows,
+    ];
+
+    const wsBreakdown = XLSX.utils.aoa_to_sheet(breakdownData);
+
+    wsBreakdown['!cols'] = [
+      { wch: 14 },  // Dátum
+      { wch: 22 },  // Költség/alkalom
+      { wch: 10 },  // Létszám
+      { wch: 20 },  // Költség/fő
+    ];
+
+    XLSX.utils.book_append_sheet(wb, wsBreakdown, 'Bontás');
+  }
+
+  // Workbook → ArrayBuffer → Blob
+  const wbOut = XLSX.write(wb, { bookType: 'xlsx', type: 'array' });
+  return new Blob([wbOut], {
+    type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+  });
+}
+
+/** Letölti az Excel fájlt a böngészőben. */
+export function downloadExcel(blob: Blob, filename: string): void {
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  setTimeout(() => URL.revokeObjectURL(url), 1500);
+}
