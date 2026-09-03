@@ -62,10 +62,51 @@
   let toast = $state<{ kind: 'success' | 'error' | 'info'; msg: string } | null>(null);
   let toastTimer: number | null = null;
   let messengerCopied = $state<'all' | 'nonmember' | null>(null);
+  let applyBankFee = $state(
+    typeof window !== 'undefined' ? localStorage.getItem('accounting_bank_fee_1pct') === 'true' : false
+  );
 
   // Derived Values
   let totalAmount = $derived(invoices.reduce((s, i) => s + i.amount, 0));
   let selectedCount = $derived(emailRecipients.filter((r) => r.selected).length);
+
+  let effectiveCalc = $derived.by(() => {
+    if (!loadedCalc) return null;
+    if (!applyBankFee) return loadedCalc;
+
+    const modifiedPerPerson = loadedCalc.perPerson.map((p) => ({
+      ...p,
+      amount: Math.round(p.amount * 1.01),
+    }));
+
+    const modifiedBreakdown =
+      'breakdown' in loadedCalc && loadedCalc.breakdown
+        ? loadedCalc.breakdown.map((b) => ({
+            ...b,
+            costPerPerson: Math.round(b.costPerPerson * 1.01),
+          }))
+        : [];
+
+    return {
+      ...loadedCalc,
+      perPerson: modifiedPerPerson,
+      breakdown: modifiedBreakdown,
+    };
+  });
+
+  function toggleBankFee() {
+    applyBankFee = !applyBankFee;
+    try {
+      localStorage.setItem('accounting_bank_fee_1pct', String(applyBankFee));
+    } catch {}
+    recomputeEmailRecipients();
+    showToast(
+      'info',
+      applyBankFee
+        ? '🏦 +1% banki utalási költség bekapcsolva'
+        : '🏦 Banki utalási költség kikapcsolva (alap összegek)'
+    );
+  }
 
   onMount(() => {
     const unsub = onAuthChange((s) => {
@@ -123,7 +164,7 @@
   }
 
   function recomputeEmailRecipients() {
-    if (!loadedCalc) {
+    if (!effectiveCalc) {
       emailRecipients = [];
       return;
     }
@@ -134,14 +175,14 @@
     }
 
     const recipients: EmailRecipient[] = [];
-    const mainRows = loadedCalc.perPerson.filter((p) => !p.name.includes(' - '));
+    const mainRows = effectiveCalc.perPerson.filter((p) => !p.name.includes(' - '));
 
     for (const main of mainRows) {
       const lookup = emailByName.get(main.name);
       if (!lookup || !lookup.email || !lookup.active) continue;
 
       const prefix = `${main.name} - `;
-      const guests = loadedCalc.perPerson
+      const guests = effectiveCalc.perPerson
         .filter((p) => p.name.startsWith(prefix))
         .map((p) => ({
           name: p.name.slice(prefix.length),
@@ -225,19 +266,20 @@
   }
 
   async function handleDownloadPdf() {
-    if (!loadedCalc || loadedCalc.perPerson.length === 0) {
+    if (!effectiveCalc || effectiveCalc.perPerson.length === 0) {
       showToast('error', 'Nincs adat a PDF generáláshoz.');
       return;
     }
     try {
-      const monthName = 'monthName' in loadedCalc ? loadedCalc.monthName : '';
+      const monthName = 'monthName' in effectiveCalc ? effectiveCalc.monthName : '';
       const { generateSettlementPdf, downloadPdf } = await import('../lib/pdf');
       const blob = generateSettlementPdf({
-        year: loadedCalc.year,
+        year: effectiveCalc.year,
         monthName,
-        perPerson: loadedCalc.perPerson,
+        perPerson: effectiveCalc.perPerson,
+        bankFeeApplied: applyBankFee,
       });
-      const filename = `Havi_Elszamolas_${loadedCalc.year}_${monthName.replace(/\s+/g, '_')}.pdf`;
+      const filename = `Havi_Elszamolas_${effectiveCalc.year}_${monthName.replace(/\s+/g, '_')}.pdf`;
       downloadPdf(blob, filename);
       showToast('success', '📥 PDF letöltve');
     } catch (err) {
@@ -247,21 +289,22 @@
   }
 
   async function handleDownloadExcel() {
-    if (!loadedCalc || loadedCalc.perPerson.length === 0) {
+    if (!effectiveCalc || effectiveCalc.perPerson.length === 0) {
       showToast('error', 'Nincs adat az Excel generáláshoz.');
       return;
     }
     try {
-      const monthName = 'monthName' in loadedCalc ? loadedCalc.monthName : '';
-      const breakdown = 'breakdown' in loadedCalc ? loadedCalc.breakdown : undefined;
+      const monthName = 'monthName' in effectiveCalc ? effectiveCalc.monthName : '';
+      const breakdown = 'breakdown' in effectiveCalc ? effectiveCalc.breakdown : undefined;
       const { generateSettlementExcel, downloadExcel } = await import('../lib/excel');
       const blob = generateSettlementExcel({
-        year: loadedCalc.year,
+        year: effectiveCalc.year,
         monthName,
-        perPerson: loadedCalc.perPerson,
+        perPerson: effectiveCalc.perPerson,
         breakdown,
+        bankFeeApplied: applyBankFee,
       });
-      const filename = `Havi_Elszamolas_${loadedCalc.year}_${monthName.replace(/\s+/g, '_')}.xlsx`;
+      const filename = `Havi_Elszamolas_${effectiveCalc.year}_${monthName.replace(/\s+/g, '_')}.xlsx`;
       downloadExcel(blob, filename);
       showToast('success', '📥 Excel letöltve');
     } catch (err) {
@@ -271,7 +314,7 @@
   }
 
   async function handleEmailSend() {
-    if (!loadedCalc) return;
+    if (!effectiveCalc) return;
     const selected = emailRecipients.filter((r) => r.selected);
     if (selected.length === 0 && !emailAdminToggle) {
       showToast('error', 'Nincs kit küldeni.');
@@ -282,16 +325,17 @@
     emailResult = null;
 
     try {
-      const monthName = 'monthName' in loadedCalc ? loadedCalc.monthName : '';
+      const monthName = 'monthName' in effectiveCalc ? effectiveCalc.monthName : '';
       let pdfBase64: string | undefined;
       
       if (emailAdminToggle) {
         const { generateSettlementPdf } = await import('../lib/pdf');
         const { blobToBase64 } = await import('../lib/email');
         const blob = generateSettlementPdf({
-          year: loadedCalc.year,
+          year: effectiveCalc.year,
           monthName,
-          perPerson: loadedCalc.perPerson,
+          perPerson: effectiveCalc.perPerson,
+          bankFeeApplied: applyBankFee,
         });
         pdfBase64 = await blobToBase64(blob);
       }
@@ -300,7 +344,7 @@
       const adminEmail = emailAdminToggle ? (authState.user?.email ?? '') : undefined;
 
       const result = await sendBillingEmails({
-        year: loadedCalc.year,
+        year: effectiveCalc.year,
         monthName,
         personal: selected.map((r) => ({
           to: r.email,
@@ -315,7 +359,7 @@
         })),
         adminEmail,
         adminSummaryRows: emailAdminToggle
-          ? loadedCalc.perPerson.map((p) => ({ name: p.name, count: p.count, amount: p.amount }))
+          ? effectiveCalc.perPerson.map((p) => ({ name: p.name, count: p.count, amount: p.amount }))
           : undefined,
         pdfBase64,
       });
@@ -328,7 +372,7 @@
       
       const errPart = result.adminError ? ` (admin: ${result.adminError})` : '';
       showToast(result.personalFailed.length === 0 ? 'success' : 'info', `📧 ${result.personalSent}/${result.totalRequested} kiküldve${errPart}`);
-      void logEvent('info', 'Billing emails sent', { sent: result.personalSent, failed: result.personalFailed.length, year: loadedCalc.year, monthName });
+      void logEvent('info', 'Billing emails sent', { sent: result.personalSent, failed: result.personalFailed.length, year: effectiveCalc.year, monthName });
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       showToast('error', `❌ Email küldési hiba: ${msg}`);
@@ -390,10 +434,10 @@
    * @param onlyNonMembers — if true, only includes people who are NOT active members with email
    */
   function buildMessengerText(onlyNonMembers: boolean): string {
-    if (!loadedCalc) return '';
+    if (!effectiveCalc) return '';
 
     const inv = invoices.find((i) => i.id === selectedInvoiceId);
-    const monthName = 'monthName' in loadedCalc ? loadedCalc.monthName : (inv ? MONTHS_HU[inv.target_month - 1] ?? '' : '');
+    const monthName = 'monthName' in effectiveCalc ? effectiveCalc.monthName : (inv ? MONTHS_HU[inv.target_month - 1] ?? '' : '');
 
     // Build a set of active member names with email
     const memberNamesWithEmail = new Set<string>();
@@ -405,13 +449,13 @@
 
     // Filter: main people only (no " - " in name = not a guest/plusz ember), amount > 0
     // Then aggregate: for each main person, add guest amounts too
-    const mainRows = loadedCalc.perPerson.filter((p) => !p.name.includes(' - ') && p.amount > 0);
+    const mainRows = effectiveCalc.perPerson.filter((p) => !p.name.includes(' - ') && p.amount > 0);
 
     const lines: string[] = [];
     for (const main of mainRows) {
       // Calculate total including their guests
       const prefix = `${main.name} - `;
-      const guestTotal = loadedCalc.perPerson
+      const guestTotal = effectiveCalc.perPerson
         .filter((p) => p.name.startsWith(prefix))
         .reduce((s, p) => s + p.amount, 0);
       const total = main.amount + guestTotal;
@@ -428,8 +472,9 @@
     // "a" vs "az" depending on month name starting with vowel
     const vowels = 'AÁEÉIÍOÓÖŐUÚÜŰaáeéiíoóöőuúüű';
     const az = vowels.includes(monthName.charAt(0)) ? 'az' : 'a';
+    const feeNotice = applyBankFee ? ' (+1% banki utalási díjjal)' : '';
 
-    return `Sziasztok, Megjött ${az} ${monthName} havi számla: Itt\n${lines.join('\n')}`;
+    return `Sziasztok, Megjött ${az} ${monthName} havi számla${feeNotice}: Itt\n${lines.join('\n')}`;
   }
 
   async function handleMessengerCopy(onlyNonMembers: boolean) {
@@ -555,11 +600,45 @@
             disabled={calculating}>
             {calculating ? 'Kalkulálás…' : 'Elszámolás Kalkulálása 🚀'}
           </button>
+
+          <!-- Banki átutalási költség (+1%) opció -->
+          <div class="mt-4 pt-3.5 flex items-center justify-between gap-3" style="border-top:1px solid var(--line)">
+            <div class="min-w-0 flex-1">
+              <div class="flex items-center gap-2 flex-wrap">
+                <span class="text-[13px] font-semibold text-fg-1">+1% banki utalási költség</span>
+                {#if applyBankFee}
+                  <span class="text-[10px] font-semibold px-2 py-0.5 rounded-full inline-flex items-center gap-1"
+                        style="background:rgba(16,185,129,0.14);color:#047857">
+                    <span class="w-1.5 h-1.5 rounded-full bg-[#10b981]"></span>
+                    Aktív
+                  </span>
+                {/if}
+              </div>
+              <p class="text-[11px] text-fg-3 mt-0.5 leading-snug">
+                Automatikusan +1%-ot számol minden ember fizetendő összegére a banki átutalási díjak fedezésére.
+              </p>
+            </div>
+            <button
+              type="button"
+              role="switch"
+              aria-checked={applyBankFee}
+              onclick={toggleBankFee}
+              class="relative inline-flex h-6 w-11 flex-shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-none"
+              style="background-color: {applyBankFee ? 'var(--accent)' : 'var(--line-strong)'};"
+              title="+1% banki átutalási költség kapcsoló"
+            >
+              <span
+                aria-hidden="true"
+                class="pointer-events-none inline-block h-5 w-5 transform rounded-full bg-white shadow-md ring-0 transition duration-200 ease-in-out"
+                style="transform: translateX({applyBankFee ? '20px' : '0px'});"
+              ></span>
+            </button>
+          </div>
         </div>
 
         <!-- Mentett elszámolás eredménye -->
-        {#if loadedCalc}
-          {@const c = loadedCalc}
+        {#if effectiveCalc}
+          {@const c = effectiveCalc}
           {@const totalPaid = c.perPerson.reduce((s, p) => s + p.amount, 0)}
           <div class="card fade-up overflow-hidden" style="border-radius:20px">
             <div class="px-4 py-3 flex items-center justify-between gap-2" style="border-bottom:1px solid var(--line)">
@@ -572,6 +651,9 @@
                   <span class="text-[10px] font-semibold px-2 py-0.5 rounded-full" style="background:rgba(14,165,233,0.14);color:#0369a1">💾 Mentett</span>
                 {:else}
                   <span class="text-[10px] font-semibold px-2 py-0.5 rounded-full" style="background:rgba(16,185,129,0.14);color:#047857">✅ Most kalkulálva</span>
+                {/if}
+                {#if applyBankFee}
+                  <span class="text-[10px] font-semibold px-2 py-0.5 rounded-full" style="background:rgba(245,158,11,0.14);color:#b45309" title="A költségek +1% banki díjjal növelve">🏦 +1% díj</span>
                 {/if}
                 <button onclick={handleDownloadPdf}
                   class="text-[11.5px] font-semibold px-2.5 py-1 rounded-full transition-colors inline-flex items-center gap-1"
@@ -630,7 +712,7 @@
                     <tr>
                       <th class="px-3 py-2 text-[10.5px] text-left font-semibold text-fg-3 uppercase tracking-wider">Név</th>
                       <th class="px-3 py-2 text-[10.5px] text-right font-semibold text-fg-3 uppercase tracking-wider">Részvétel</th>
-                      <th class="px-3 py-2 text-[10.5px] text-right font-semibold text-fg-3 uppercase tracking-wider">Fizetendő</th>
+                      <th class="px-3 py-2 text-[10.5px] text-right font-semibold text-fg-3 uppercase tracking-wider">{applyBankFee ? 'Fizetendő (+1%)' : 'Fizetendő'}</th>
                     </tr>
                   </thead>
                   <tbody>

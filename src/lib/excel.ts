@@ -14,6 +14,7 @@ export interface ExcelSettlementInput {
   monthName: string;
   perPerson: SettlementPersonRow[];
   breakdown?: SettlementBreakdownRow[];
+  bankFeeApplied?: boolean;
 }
 
 /**
@@ -23,7 +24,8 @@ export function generateSettlementExcel(input: ExcelSettlementInput): Blob {
   const wb = XLSX.utils.book_new();
 
   // --- Sheet 1: Összesítő (személy × összeg) ---
-  const summaryHeader = ['Név', 'Részvétel', 'Fizetendő (Ft)'];
+  const feeSuffix = input.bankFeeApplied ? ' (+1% banki díjjal, Ft)' : ' (Ft)';
+  const summaryHeader = ['Név', 'Részvétel', `Fizetendő${feeSuffix}`];
   const summaryRows = input.perPerson.map((p) => [
     p.name,
     p.count,
@@ -34,8 +36,12 @@ export function generateSettlementExcel(input: ExcelSettlementInput): Blob {
   const totalAmount = input.perPerson.reduce((s, p) => s + p.amount, 0);
   summaryRows.push(['Összesen', totalCount, Math.round(totalAmount)]);
 
+  const titlePrefix = input.bankFeeApplied
+    ? `Havi Röplabda Elszámolás (+1% banki költség) — ${input.year}. ${input.monthName}`
+    : `Havi Röplabda Elszámolás — ${input.year}. ${input.monthName}`;
+
   const summaryData = [
-    [`Havi Röplabda Elszámolás — ${input.year}. ${input.monthName}`],
+    [titlePrefix],
     [],
     summaryHeader,
     ...summaryRows,
@@ -47,14 +53,15 @@ export function generateSettlementExcel(input: ExcelSettlementInput): Blob {
   wsSummary['!cols'] = [
     { wch: 30 },  // Név
     { wch: 12 },  // Részvétel
-    { wch: 18 },  // Fizetendő
+    { wch: input.bankFeeApplied ? 26 : 18 },  // Fizetendő
   ];
 
   XLSX.utils.book_append_sheet(wb, wsSummary, 'Összesítő');
 
   // --- Sheet 2: Bontás (alkalmanként) ---
   if (input.breakdown && input.breakdown.length > 0) {
-    const breakdownHeader = ['Dátum', 'Költség / alkalom (Ft)', 'Létszám', 'Költség / fő (Ft)'];
+    const costPerPersonHeader = input.bankFeeApplied ? 'Költség / fő (+1% díjjal, Ft)' : 'Költség / fő (Ft)';
+    const breakdownHeader = ['Dátum', 'Költség / alkalom (Ft)', 'Létszám', costPerPersonHeader];
     const breakdownRows = input.breakdown.map((b) => [
       b.date,
       Math.round(b.costPerSession),
@@ -62,8 +69,12 @@ export function generateSettlementExcel(input: ExcelSettlementInput): Blob {
       Math.round(b.costPerPerson),
     ]);
 
+    const breakdownTitle = input.bankFeeApplied
+      ? `Bontás alkalmanként (+1% banki költséggel) — ${input.year}. ${input.monthName}`
+      : `Bontás alkalmanként — ${input.year}. ${input.monthName}`;
+
     const breakdownData = [
-      [`Bontás alkalmanként — ${input.year}. ${input.monthName}`],
+      [breakdownTitle],
       [],
       breakdownHeader,
       ...breakdownRows,

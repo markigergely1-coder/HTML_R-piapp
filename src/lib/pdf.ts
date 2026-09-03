@@ -29,6 +29,7 @@ export function generateSettlementPdf(input: {
   year: number;
   monthName: string;
   perPerson: SettlementPersonRow[];
+  bankFeeApplied?: boolean;
 }): Blob {
   const doc = new jsPDF({ unit: 'mm', format: 'a4' });
 
@@ -48,7 +49,10 @@ export function generateSettlementPdf(input: {
     month: 'long',
     day: 'numeric',
   });
-  doc.text(safeText(`Generálva: ${generatedAt}`), 105, 27, { align: 'center' });
+  const subText = input.bankFeeApplied
+    ? `Generálva: ${generatedAt}  ·  +1% banki átutalási költséggel növelt összegek`
+    : `Generálva: ${generatedAt}`;
+  doc.text(safeText(subText), 105, 27, { align: 'center' });
   doc.setTextColor(0);
 
   // Tábla
@@ -60,9 +64,10 @@ export function generateSettlementPdf(input: {
   const total = input.perPerson.reduce((s, p) => s + p.amount, 0);
   const totalCount = input.perPerson.reduce((s, p) => s + p.count, 0);
 
+  const amountColTitle = input.bankFeeApplied ? 'Fizetendő (+1%)' : 'Fizetendő';
   autoTable(doc, {
     startY: 38,
-    head: [[safeText('Név'), safeText('Részvétel'), safeText('Fizetendő')]],
+    head: [[safeText('Név'), safeText('Részvétel'), safeText(amountColTitle)]],
     body: rows,
     foot: [[
       { content: safeText('Összesen'), styles: { fontStyle: 'bold' } },
